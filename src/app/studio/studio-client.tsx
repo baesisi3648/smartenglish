@@ -48,6 +48,7 @@ type Result = {
   notes: string;
   agent: string;
   imagesSeen: boolean;
+  examplesUsed: number;
   photos: string[];
 };
 
@@ -338,6 +339,10 @@ export default function StudioClient({
                 <p className="mt-2 text-xs text-ink-soft">
                   네이버 에디터에 붙여넣은 뒤 <b>[사진N]</b> 위치에 해당 사진을 올려 주세요.
                   {result.photos.length > 0 && !result.imagesSeen && " (이 AI는 사진을 보지 못해 위치만 표시했습니다)"}
+                  <br />
+                  {result.examplesUsed > 0
+                    ? `✍️ 블로그 최근 글 ${result.examplesUsed}편의 문체를 참고했습니다.`
+                    : "✍️ 블로그 글을 불러오지 못해 기본 문체 예시로 썼습니다."}
                 </p>
               </Out>
               <Out

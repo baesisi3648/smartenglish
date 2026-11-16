@@ -32,13 +32,18 @@ function Art({ name, className = "", scale = 1 }: { name: keyof typeof art; clas
   );
 }
 
-/** 텍스트 로고 — 블로그 배너 원본은 로고 윗부분이 잘려 있어 이미지 대신 글꼴로 재현 */
-function BrandLogo({ className = "" }: { className?: string }) {
+/** 공식 로고 (원장님 제공 원본에서 글자 영역만 잘라 투명 배경 처리, 720×144) */
+function BrandLogo({ height }: { height: number }) {
   return (
-    <span className={`inline-flex items-baseline gap-1 leading-none ${className}`} aria-hidden>
-      <span className="font-display tracking-tight text-hb-blue">스마트</span>
-      <span className="font-round text-hb-circle">해법영어</span>
-    </span>
+    <Image
+      src="/brand/logo.png"
+      alt="스마트해법영어"
+      width={720}
+      height={144}
+      priority
+      style={{ height, width: "auto" }}
+      className="select-none"
+    />
   );
 }
 
@@ -90,7 +95,7 @@ function Header() {
     <header className="sticky top-0 z-40 border-b border-line bg-white/95 backdrop-blur">
       <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-4 px-4 sm:px-6">
         <a href="#top" className="flex items-center gap-2" aria-label={academy.name}>
-          <BrandLogo className="text-[1.35rem]" />
+          <BrandLogo height={24} />
           <span className="font-display text-lg text-hb-navy">백운밸리점</span>
         </a>
         <nav className="hidden gap-7 text-[15px] font-bold text-ink md:flex">
@@ -563,7 +568,7 @@ export default function Home() {
       <footer className="border-t-[3px] border-hb-blue bg-white">
         <div className="mx-auto flex max-w-6xl flex-col gap-6 px-4 py-10 sm:px-6 md:flex-row md:items-end md:justify-between">
           <div className="text-[13px] leading-6 text-ink-soft">
-            <BrandLogo className="text-2xl" />
+            <BrandLogo height={30} />
             <p className="mt-2 font-display text-base text-hb-navy">{academy.name}</p>
             <p>
               {academy.type} 신고번호 {academy.registration.value}

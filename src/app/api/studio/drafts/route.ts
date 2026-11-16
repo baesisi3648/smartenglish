@@ -4,6 +4,7 @@ import { runAgent, type PromptImage } from "@/studio/acp-run";
 import { randomUUID } from "node:crypto";
 import { AgentError, redactSecrets } from "@/studio/errors";
 import { runDeepseek } from "@/studio/deepseek-api";
+import { getStyleExamples } from "@/studio/examples";
 import { runGemini } from "@/studio/gemini-api";
 import { availableAgents, isTrustedStudioRequest, studioEnabled, takeApiQuota } from "@/studio/guard";
 import { verifySessionToken, SESSION_COOKIE } from "@/studio/auth";
@@ -103,8 +104,10 @@ export async function POST(req: NextRequest) {
   const picked = sanitizeKeywords(rawKeywords);
   const keywords = picked.length > 0 ? picked : [type.defaultKeyword];
 
+  // 퓨샷: 같은 유형의 최근 블로그 글 (1시간 캐시, 실패 시 고정 예시)
+  const examples = await getStyleExamples(type.id);
   const prompt = (canSee: boolean) =>
-    buildPrompt({ type, topic, values, memo, keywords, imageCount: images.length, imagesAttached: canSee });
+    buildPrompt({ type, topic, values, memo, keywords, imageCount: images.length, imagesAttached: canSee, examples });
 
   if (def.kind === "api") {
     const client = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || req.headers.get("x-real-ip") || "local";
@@ -132,7 +135,13 @@ export async function POST(req: NextRequest) {
     }
     return NextResponse.json({
       success: true,
-      data: { ...assemble(draft, keywords), keywords, agent: agentId, imagesSeen: run.imagesSent },
+      data: {
+        ...assemble(draft, keywords),
+        keywords,
+        agent: agentId,
+        imagesSeen: run.imagesSent,
+        examplesUsed: examples.length,
+      },
     });
   } catch (e) {
     if (e instanceof AgentError) {

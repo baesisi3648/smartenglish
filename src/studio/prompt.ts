@@ -37,6 +37,20 @@ const FACT_RULES = `
 
 const esc = (s: string) => s.replace(/<\/?원장입력>/g, "");
 
+/** 퓨샷 예시 블록: 실제 글의 말투·줄바꿈·구성만 참고하게 하고, 사실은 가져오지 못하게 한다 */
+function styleExamples(examples?: string[]) {
+  if (!examples?.length) return SAMPLE;
+  const blocks = examples
+    .map((e, i) => `<예시${i + 1}>\n${esc(e).replace(/<\/?예시\d*>/g, "")}\n</예시${i + 1}>`)
+    .join("\n\n");
+  return `[문체 예시 — 원장님 블로그의 최근 실제 글 ${examples.length}편]
+아래 예시의 말투, 줄바꿈 길이, 이모지 쓰는 법, 문단 구성, 마무리 방식을 최대한 비슷하게 따라 하세요.
+단, 예시 속 내용(학교, 학년, 점수, 행사, 학생 이야기, 수상 등)은 이번 글과 무관합니다. 절대 가져오지 마세요.
+예시의 ○ 표시는 가려 둔 숫자입니다. 새 글에 ○를 쓰지 마세요.
+
+${blocks}`;
+}
+
 export function buildPrompt(opts: {
   type: PostType;
   topic: string;
@@ -46,6 +60,8 @@ export function buildPrompt(opts: {
   keywords: string[];
   imageCount: number;
   imagesAttached: boolean;
+  /** 퓨샷: 원장님 블로그 최근 실제 글 (숫자 가림). 없으면 고정 예시 사용 */
+  examples?: string[];
 }) {
   const facts = opts.type.fields
     .map((f) => (opts.values[f.key]?.trim() ? `- ${f.label}: ${esc(opts.values[f.key].trim())}` : null))
@@ -64,7 +80,7 @@ export function buildPrompt(opts: {
 
 ${STYLE_GUIDE}
 
-${SAMPLE}
+${styleExamples(opts.examples)}
 
 ${FACT_RULES}
 
