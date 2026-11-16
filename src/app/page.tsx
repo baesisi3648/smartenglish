@@ -506,7 +506,7 @@ function Visit() {
             <tr>
               <th className="py-2 font-bold">구분</th>
               <th className="py-2 font-bold">과정</th>
-              <th className="py-2 text-right font-bold">교습비 (1달)</th>
+              <th className="py-2 pr-4 text-right font-bold">교습비 (1달)</th>
             </tr>
           </thead>
           <tbody>
@@ -514,14 +514,18 @@ function Visit() {
               <tr key={`${t.group}-${t.course}`} className="border-b border-line last:border-0">
                 <td className="py-3 font-extrabold text-hb-navy">{t.group}</td>
                 <td className="py-3">{t.course}</td>
-                <td className="py-3 text-right text-lg font-extrabold">
-                  {t.fee.toLocaleString("ko-KR")}원{t.from && "~"}
+                <td className="py-3 text-right text-lg font-extrabold tabular-nums">
+                  {t.fee.toLocaleString("ko-KR")}원
+                  {/* "~" 자리를 항상 같은 폭으로 비워 둬서 금액 끝이 한 줄로 정렬되게 */}
+                  <span className="inline-block w-4 text-left" aria-hidden={!t.from}>
+                    {t.from ? "~" : ""}
+                  </span>
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
-        <p className="mt-4 rounded-xl bg-bg-soft px-4 py-2 text-sm font-bold text-hb-navy">비고 · {tuition.discount}</p>
+        <p className="mt-4 rounded-xl bg-bg-soft px-4 py-2 text-sm font-bold text-hb-navy">{tuition.discount}</p>
         <p className="mt-3 text-xs leading-relaxed text-ink-soft">
           반·수업 시간에 따라 다르며, 관할 교육지원청에 신고된 교습비({tuition.filedAt}) 기준입니다.
         </p>
