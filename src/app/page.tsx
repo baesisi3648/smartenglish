@@ -437,6 +437,26 @@ function Story() {
   );
 }
 
+/**
+ * 교습비 요약: 학년(초등/중등) × 과정(파닉스/영어)별 최저 금액. 같은 과정에 금액이 여러 개면 "~"를 붙인다.
+ * 예) 초등 파닉스 200,000원 / 초등 영어 220,000원~ / 중등 영어 250,000원~
+ */
+function tuitionSummary(groups: (typeof academy)["tuition"]["value"]["groups"]) {
+  return groups.flatMap((g) => {
+    const byCourse = new Map<string, number[]>();
+    for (const r of g.rows) {
+      const course = r.name.startsWith("영어") ? "영어" : r.name;
+      byCourse.set(course, [...(byCourse.get(course) ?? []), r.fee]);
+    }
+    return [...byCourse].map(([course, fees]) => ({
+      group: g.label,
+      course,
+      fee: Math.min(...fees),
+      from: new Set(fees).size > 1,
+    }));
+  });
+}
+
 /* ───────── 오시는 길 · 교습비 ───────── */
 function Visit() {
   const tuition = academy.tuition.value;
@@ -476,38 +496,29 @@ function Visit() {
           교습비 안내
           <Verify on={academy.tuition.verify} />
         </h2>
-        <table className="mt-5 w-full text-left text-[15px]">
-          <thead className="border-b-2 border-line text-xs text-ink-soft">
+        <table className="mt-5 w-full text-left">
+          <thead className="border-b-2 border-line text-sm text-ink-soft">
             <tr>
-              <th className="py-2 font-bold">반</th>
-              <th className="py-2 font-bold">수업</th>
-              <th className="py-2 text-right font-bold">월 교습비</th>
+              <th className="py-2 font-bold">구분</th>
+              <th className="py-2 font-bold">과정</th>
+              <th className="py-2 text-right font-bold">교습비 (1달)</th>
             </tr>
           </thead>
-          {tuition.groups.map((g) => (
-            <tbody key={g.label}>
-              <tr>
-                <th colSpan={3} className="pb-1 pt-4 text-left text-sm font-extrabold text-hb-blue">
-                  {g.label}
-                </th>
+          <tbody>
+            {tuitionSummary(tuition.groups).map((t) => (
+              <tr key={`${t.group}-${t.course}`} className="border-b border-line last:border-0">
+                <td className="py-3 font-extrabold text-hb-navy">{t.group}</td>
+                <td className="py-3">{t.course}</td>
+                <td className="py-3 text-right text-lg font-extrabold">
+                  {t.fee.toLocaleString("ko-KR")}원{t.from && "~"}
+                </td>
               </tr>
-              {g.rows.map((r) => (
-                <tr key={r.name} className="border-b border-line">
-                  <td className="py-2 font-extrabold text-hb-navy">{r.name}</td>
-                  <td className="py-2">
-                    {r.minutes}분 × 주 {r.perWeek}회
-                    <span className="block text-xs text-ink-soft">월 {r.monthlyMinutes.toLocaleString("ko-KR")}분</span>
-                  </td>
-                  <td className="py-2 text-right font-extrabold">{r.fee.toLocaleString("ko-KR")}원</td>
-                </tr>
-              ))}
-            </tbody>
-          ))}
+            ))}
+          </tbody>
         </table>
-        <p className="mt-4 rounded-xl bg-bg-soft px-4 py-2 text-sm font-bold text-hb-navy">🎁 {tuition.discount}</p>
+        <p className="mt-4 rounded-xl bg-bg-soft px-4 py-2 text-sm font-bold text-hb-navy">비고 · {tuition.discount}</p>
         <p className="mt-3 text-xs leading-relaxed text-ink-soft">
-          반별 정원 {tuition.capacity}명 · 월 교습시간은 한 달 {tuition.weeksPerMonth}주 기준 · 관할 교육지원청에 신고된
-          교습비({tuition.filedAt})입니다.
+          반·수업 시간에 따라 다르며, 관할 교육지원청에 신고된 교습비({tuition.filedAt}) 기준입니다.
         </p>
       </div>
     </section>

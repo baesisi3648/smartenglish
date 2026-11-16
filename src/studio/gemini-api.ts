@@ -49,7 +49,7 @@ export async function runGemini(
       signal: ctrl,
     });
   } catch (e) {
-    if (e instanceof Error && e.name === "TimeoutError") throw new AgentError("TIMEOUT", "Gemini 응답 시간 초과");
+    if (e instanceof Error && e.name === "TimeoutError") throw new AgentError("TIMEOUT", "Gemini 응답 시간 초과", `model=${geminiModel()} timeout=${timeoutMs}ms`);
     throw new AgentError("AGENT_ERROR", "Gemini에 연결하지 못했습니다. 잠시 뒤 다시 시도해 주세요.", String(e));
   }
 
