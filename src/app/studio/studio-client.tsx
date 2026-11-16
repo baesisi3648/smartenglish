@@ -73,8 +73,6 @@ export default function StudioClient({
   // null = 아직 고르지 않음 → 글 유형의 기본 키워드 사용
   const [kwPicked, setKwPicked] = useState<string[] | null>(null);
   const [topic, setTopic] = useState("");
-  const [values, setValues] = useState<Record<string, string>>({});
-  const [memo, setMemo] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [consent, setConsent] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -112,10 +110,8 @@ export default function StudioClient({
     fd.set("agent", agent);
     fd.set("type", typeId);
     fd.set("topic", topic);
-    fd.set("memo", memo);
     selectedKeywords.forEach((k) => fd.append("keywords", k));
     fd.set("consent", consent ? "yes" : "no");
-    for (const f of type.fields) fd.set(`f_${f.key}`, values[f.key] ?? "");
     try {
       for (const f of await Promise.all(files.map(shrinkImage))) fd.append("images", f);
       const res = await fetch("/api/studio/drafts", {
@@ -211,36 +207,29 @@ export default function StudioClient({
               </div>
             </Card>
 
-            <Card title="3. 내용">
+            <Card title="3. 주제 및 내용 · 요청사항">
               <Input
-                label="주제"
+                label="무엇에 대한 글인지, 넣고 싶은 내용과 요청사항을 자유롭게 적어 주세요"
                 required
+                long
                 value={topic}
                 onChange={setTopic}
-                placeholder="예) 덕장중 3학년 2학기 중간고사 결과"
+                placeholder={`예) ${type.fields
+                  .map((f) => f.placeholder)
+                  .filter(Boolean)
+                  .join(", ")}\n분위기는 밝고 따뜻하게 써 주세요.`}
               />
-              {type.fields.map((f) => (
-                <Input
-                  key={`${type.id}-${f.key}`}
-                  label={f.label}
-                  required={f.required}
-                  long={f.long}
-                  placeholder={f.placeholder}
-                  value={values[f.key] ?? ""}
-                  onChange={(v) => setValues({ ...values, [f.key]: v })}
-                />
-              ))}
-              <Input
-                label="추가 메모 (선택)"
-                long
-                value={memo}
-                onChange={setMemo}
-                placeholder="강조하고 싶은 점, 분위기 등"
-              />
-              <KeywordPicker groups={keywordGroups} selected={selectedKeywords} onChange={setKwPicked} />
               <p className="text-xs text-amber-700">
-                ⚠️ 입력하지 않은 점수·인원·학생 말은 AI가 쓰지 않습니다. 필요한 사실은 직접 적어 주세요.
+                ⚠️ 점수·인원·학생 말처럼 사실이 필요한 내용은 여기에 적은 것만 글에 들어갑니다.
               </p>
+              <details className="rounded-lg border border-line px-3 py-2">
+                <summary className="cursor-pointer text-sm font-bold text-hb-navy">
+                  검색 키워드 (선택) · 지금: {selectedKeywords.join(", ")}
+                </summary>
+                <div className="mt-3">
+                  <KeywordPicker groups={keywordGroups} selected={selectedKeywords} onChange={setKwPicked} />
+                </div>
+              </details>
             </Card>
 
             <Card title="4. 사진 (최대 6장, 블로그에 올릴 순서대로)">
@@ -408,7 +397,7 @@ function Input({
           onChange={(e) => onChange(e.target.value)}
           placeholder={placeholder}
           required={required}
-          rows={3}
+          rows={7}
           className={cls}
         />
       ) : (

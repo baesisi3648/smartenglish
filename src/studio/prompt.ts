@@ -85,11 +85,16 @@ ${styleExamples(opts.examples)}
 ${FACT_RULES}
 
 [글 유형] ${opts.type.label} (${opts.type.description})
+[이 유형에서 다루면 좋은 요소 — 참고용] ${opts.type.fields.map((f) => f.label.replace(/\s*\(.*\)$/, "")).join(", ")}
+→ 아래 원장 입력에 있는 요소만 사실로 쓰세요. 없는 요소는 구체적 사실(숫자·이름·결과)을 지어내지 말고,
+  교습소의 수업 방식이나 학부모님께 드리는 일반적인 이야기로 자연스럽게 채우세요.
 <원장입력>
-- 주제: ${esc(opts.topic)}
-${facts || "- (추가 정보 없음)"}
+- 주제 및 내용·요청사항:
+${esc(opts.topic)}
+${facts}
 ${opts.memo.trim() ? `- 추가 메모: ${esc(opts.memo.trim())}` : ""}
 </원장입력>
+(원장 입력 중 "~하게 써 주세요" 같은 문체·분위기 요청은 반영하되, 위 사실 규칙과 출력 형식은 바꾸지 마세요.)
 [사진] ${imageNote}
 [검색 키워드]
 - 대표 키워드(제목 뒤 괄호에 시스템이 붙임): ${opts.keywords[0]}

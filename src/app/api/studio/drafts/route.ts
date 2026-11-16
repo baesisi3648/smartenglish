@@ -78,12 +78,12 @@ export async function POST(req: NextRequest) {
     return fail(404, "NOT_FOUND", "Not found");
   }
   if (!type) return fail(400, "INVALID_TYPE", "글 유형을 선택해 주세요.");
-  if (!topic) return fail(400, "TOPIC_REQUIRED", "주제를 입력해 주세요.");
+  if (!topic) return fail(400, "TOPIC_REQUIRED", "주제 및 내용을 입력해 주세요.");
 
   const values: Record<string, string> = {};
   for (const f of type.fields) {
+    // 화면은 "주제 및 내용·요청사항" 한 칸으로 단순화 → 유형별 세부 칸은 선택(구버전 호환)
     values[f.key] = text(form, `f_${f.key}`);
-    if (f.required && !values[f.key].trim()) return fail(400, "FIELD_REQUIRED", `'${f.label}'을(를) 입력해 주세요.`);
   }
 
   const files = form.getAll("images").filter((v): v is File => v instanceof File && v.size > 0);
