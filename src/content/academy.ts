@@ -14,16 +14,45 @@ export const academy = {
   director: "Ryan 원장",
 
   // 학원법상 광고 표시사항 — 교습소 신고증명서/교습비 신고 내역으로 확정할 것
-  registration: { value: "제1920호", verify: true, source: "블로그 소개글" } as Field<string>,
-  subject: { value: "영어", verify: true, source: "추정(신고증 확인 필요)" } as Field<string>,
+  registration: { value: "제1920호", source: "원장 확인", checkedAt: "2026-11-16" } as Field<string>,
+  subject: { value: "영어", source: "교습비 산정 내역서 (교습소명: 스마트해법영어백운밸리점영어교습소)", checkedAt: "2026-11-16" } as Field<string>,
   tuition: {
-    value: [
-      { label: "초등", amount: "220,000원", schedule: "주 5회" },
-      { label: "중등", amount: "250,000원", schedule: "주 5회" },
-    ],
-    verify: true,
-    source: "블로그 소개글 (초등 -22/주5회, 중등 -25/주5회)",
-  } as Field<{ label: string; amount: string; schedule: string }[]>,
+    value: {
+      filedAt: "2025.01.20",
+      weeksPerMonth: 4.3, // 매월 정해진 날 납부 기준
+      capacity: 8, // 반별 정원
+      discount: "형제할인 10,000원",
+      groups: [
+        {
+          label: "초등",
+          rows: [
+            { name: "파닉스", minutes: 60, perWeek: 5, monthlyMinutes: 1290, fee: 200_000 },
+            { name: "영어 A", minutes: 60, perWeek: 5, monthlyMinutes: 1290, fee: 220_000 },
+            { name: "영어 B", minutes: 90, perWeek: 3, monthlyMinutes: 1161, fee: 220_000 },
+            { name: "영어 C", minutes: 90, perWeek: 5, monthlyMinutes: 1935, fee: 250_000 },
+            { name: "영어 D", minutes: 120, perWeek: 3, monthlyMinutes: 1548, fee: 250_000 },
+          ],
+        },
+        {
+          label: "중등",
+          rows: [
+            { name: "영어 A", minutes: 60, perWeek: 5, monthlyMinutes: 1290, fee: 250_000 },
+            { name: "영어 B", minutes: 90, perWeek: 3, monthlyMinutes: 1161, fee: 250_000 },
+            { name: "영어 C", minutes: 90, perWeek: 5, monthlyMinutes: 1935, fee: 280_000 },
+            { name: "영어 D", minutes: 120, perWeek: 3, monthlyMinutes: 1548, fee: 280_000 },
+          ],
+        },
+      ],
+    },
+    source: "교습비 산정 내역서(별지서식) 2025.01.20",
+    checkedAt: "2026-11-16",
+  } as Field<{
+    filedAt: string;
+    weeksPerMonth: number;
+    capacity: number;
+    discount: string;
+    groups: { label: string; rows: { name: string; minutes: number; perWeek: number; monthlyMinutes: number; fee: number }[] }[];
+  }>,
 
   contact: {
     phone: { display: "0507-1383-3732", tel: "050713833732", note: "대표 전화" },

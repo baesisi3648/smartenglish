@@ -39,6 +39,7 @@ async function call(content: Content[], signal: AbortSignal) {
         model: deepseekModel(),
         messages: [{ role: "user", content }],
         response_format: { type: "json_object" },
+        max_tokens: 4096, // 출력 상한 (본문 400~900자 + JSON 여유, 비용 상한 역할)
         temperature: 0.8,
         stream: false,
       }),
@@ -46,7 +47,7 @@ async function call(content: Content[], signal: AbortSignal) {
     });
   } catch (e) {
     if (e instanceof Error && e.name === "TimeoutError") throw new AgentError("TIMEOUT", "DeepSeek 응답 시간 초과");
-    throw new AgentError("AGENT_ERROR", `DeepSeek 호출 실패: ${e instanceof Error ? e.message : e}`);
+    throw new AgentError("AGENT_ERROR", "DeepSeek에 연결하지 못했습니다. 잠시 뒤 다시 시도해 주세요.", String(e));
   }
   return { res, json: (await res.json().catch(() => ({}))) as ChatResponse };
 }
@@ -80,10 +81,10 @@ export async function runDeepseek(
 
   if (!res.ok) {
     const msg = json.error?.message ?? `HTTP ${res.status}`;
-    if (res.status === 401) throw new AgentError("AUTH_REQUIRED", "DeepSeek API 키가 올바르지 않습니다. 키 설정을 확인해 주세요.");
-    if (res.status === 402) throw new AgentError("AUTH_REQUIRED", "DeepSeek 계정 잔액이 부족합니다. 충전 후 다시 시도해 주세요.");
-    if (res.status === 429) throw new AgentError("RATE_LIMITED", "DeepSeek 사용량 한도에 걸렸습니다. 잠시 뒤 다시 시도해 주세요.");
-    throw new AgentError("AGENT_ERROR", `DeepSeek 오류: ${msg}`);
+    if (res.status === 401) throw new AgentError("AUTH_REQUIRED", "DeepSeek API 키가 올바르지 않습니다. 키 설정을 확인해 주세요.", msg);
+    if (res.status === 402) throw new AgentError("AUTH_REQUIRED", "DeepSeek 계정 잔액이 부족합니다. 충전 후 다시 시도해 주세요.", msg);
+    if (res.status === 429) throw new AgentError("RATE_LIMITED", "DeepSeek 사용량 한도에 걸렸습니다. 잠시 뒤 다시 시도해 주세요.", msg);
+    throw new AgentError("AGENT_ERROR", "DeepSeek에서 오류가 났습니다. 다시 시도해 주세요.", `HTTP ${res.status}: ${msg}`);
   }
 
   const choice = json.choices?.[0];

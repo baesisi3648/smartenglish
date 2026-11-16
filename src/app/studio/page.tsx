@@ -27,8 +27,8 @@ async function Gate() {
         <div className="max-w-md rounded-2xl bg-white p-6 text-sm leading-6 ring-1 ring-line">
           <p className="font-bold text-hb-navy">관리자 비밀번호가 설정되지 않았습니다.</p>
           <p className="mt-2 text-ink-soft">
-            <code>STUDIO_PASSWORD</code> 환경변수(8자 이상)를 설정해 주세요. 로컬은 <code>web/.env.local</code>, 배포는
-            Vercel 환경변수입니다.
+            <code>STUDIO_PASSWORD</code>(8자 이상)와 <code>STUDIO_SECRET</code>(32자 이상 무작위) 환경변수를 설정해
+            주세요. PC는 <code>처음 설정.cmd</code>가 자동으로 만들고, 배포는 Vercel 환경변수입니다.
           </p>
         </div>
       </Center>

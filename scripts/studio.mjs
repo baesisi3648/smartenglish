@@ -13,7 +13,8 @@ const child = spawn(`npx next dev -p ${port} -H 127.0.0.1`, {
   cwd: root,
   stdio: "inherit",
   shell: true,
-  env: { ...process.env, STUDIO_ENABLED: "1" },
+  // 항상 127.0.0.1(이 PC 안)에만 연다 → STUDIO_LOOPBACK=1 일 때만 ChatGPT·Claude(ACP)가 켜짐
+  env: { ...process.env, STUDIO_ENABLED: "1", STUDIO_LOOPBACK: "1" },
 });
 console.log(`\n  ✍️  블로그 스튜디오: http://localhost:${port}/studio\n`);
 child.on("exit", (code) => process.exit(code ?? 0));

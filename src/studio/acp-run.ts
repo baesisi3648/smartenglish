@@ -15,21 +15,31 @@ export type PromptImage = { data: string; mimeType: string };
 const AUTH_RE = /auth|login|log in|credential|api key|unauthori[sz]ed/i;
 const MAX_OUTPUT_CHARS = 60_000;
 
-/** 구독 로그인만 쓰도록 API 키·클라우드 인증 환경변수는 자식 프로세스에 넘기지 않는다 */
-const BLOCKED_ENV = [
-  "ANTHROPIC_API_KEY",
-  "ANTHROPIC_AUTH_TOKEN",
-  "CLAUDE_CODE_USE_BEDROCK",
-  "CLAUDE_CODE_USE_VERTEX",
-  "OPENAI_API_KEY",
-  "CODEX_API_KEY",
-  "GEMINI_API_KEY",
-  "DEEPSEEK_API_KEY",
-  "GOOGLE_API_KEY",
-  "GOOGLE_GENAI_USE_VERTEXAI",
-  "GOOGLE_APPLICATION_CREDENTIALS",
-  "STUDIO_ENABLED",
-];
+/**
+ * 자식 프로세스(AI 어댑터)에는 실행에 필요한 환경변수만 넘긴다 (허용 목록).
+ * → STUDIO_PASSWORD·STUDIO_SECRET·각종 API 키가 에이전트에 노출되지 않고, 구독 로그인만 쓰게 된다.
+ * 로그인 정보는 사용자 홈(~/.codex, ~/.claude)에 있으므로 홈/AppData 경로는 넘긴다.
+ */
+const ALLOWED_ENV = new Set(
+  [
+    "PATH", "PATHEXT", "SystemRoot", "SystemDrive", "windir", "ComSpec", "OS",
+    "TEMP", "TMP", "TMPDIR", "HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "USERNAME", "USER", "LOGNAME", "SHELL",
+    "APPDATA", "LOCALAPPDATA", "ProgramData", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432",
+    "CommonProgramFiles", "CommonProgramFiles(x86)", "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE",
+    "LANG", "LC_ALL", "TERM", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME",
+    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "NODE_EXTRA_CA_CERTS",
+    "CODEX_HOME", "CLAUDE_CONFIG_DIR",
+  ].map((k) => k.toUpperCase()),
+);
+
+function childEnv() {
+  const env: Record<string, string | undefined> = {};
+  for (const [k, v] of Object.entries(process.env)) if (ALLOWED_ENV.has(k.toUpperCase())) env[k] = v;
+  return env as NodeJS.ProcessEnv; // Next 타입이 NODE_ENV 를 필수로 선언 — 자식에는 넘기지 않음
+}
+
+/** 에이전트가 지원하면 읽기 전용 계열 모드로 전환 (codex-acp: read-only) */
+const SAFE_MODES = ["read-only", "readonly", "read_only"];
 
 /** 동시에 한 건만 실행 (원장 PC 자원 보호) */
 let busy = false;
@@ -69,8 +79,7 @@ export async function runAgent(
   const def = ACP_AGENTS[agentId];
   const cwd = await mkdtemp(path.join(tmpdir(), "hb-studio-"));
   busy = true;
-  const env = { ...process.env };
-  for (const k of BLOCKED_ENV) delete env[k];
+  const env = childEnv();
 
   // command/args 는 코드에 고정된 값만 사용 (사용자 입력 없음)
   const child = spawn(def.command, def.args, {
@@ -87,10 +96,12 @@ export async function runAgent(
 
   let timer: NodeJS.Timeout | undefined;
   const failures = new Promise<never>((_, reject) => {
-    child.once("error", (e) => reject(new AgentError("SPAWN_FAILED", `${def.label} 실행 실패: ${e.message}`)));
+    child.once("error", (e) =>
+      reject(new AgentError("SPAWN_FAILED", `${def.label}를 실행하지 못했습니다. Node.js 설치를 확인해 주세요.`, e.message)),
+    );
     child.once("exit", (code) => {
       if (code !== 0 && code !== null)
-        reject(new AgentError("AGENT_ERROR", `${def.label}가 종료되었습니다 (code ${code}). ${stderr.slice(-500)}`));
+        reject(new AgentError("AGENT_ERROR", `${def.label}가 예기치 않게 종료되었습니다. 다시 시도해 주세요.`, `code ${code}: ${stderr.slice(-500)}`));
     });
     timer = setTimeout(() => reject(new AgentError("TIMEOUT", `${def.label} 응답 시간 초과`)), timeoutMs);
     signal?.addEventListener("abort", () => reject(new AgentError("AGENT_ERROR", "요청이 취소되었습니다.")), { once: true });
@@ -131,7 +142,7 @@ export async function runAgent(
       session = await newSession();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      if (!AUTH_RE.test(msg)) throw new AgentError("AGENT_ERROR", msg);
+      if (!AUTH_RE.test(msg)) throw new AgentError("AGENT_ERROR", `${def.label} 세션을 시작하지 못했습니다. 다시 시도해 주세요.`, msg);
       // 구독 로그인 방식(이미 CLI에 저장된 로그인)으로만 인증 시도 — API 키/Vertex/게이트웨이 제외
       const offered = new Set((init.authMethods ?? []).map((m) => m.id));
       for (const methodId of def.authMethods.filter((id) => offered.has(id))) {
@@ -144,6 +155,12 @@ export async function runAgent(
         }
       }
       if (!session) throw new AgentError("AUTH_REQUIRED", `${def.label} 로그인이 필요합니다. ${def.loginHelp}`);
+    }
+
+    // 읽기 전용 모드 지원 시 전환 (도구 권한 요청은 위에서 모두 거절하지만 한 겹 더)
+    const safe = session.modes?.availableModes?.find((m) => SAFE_MODES.includes(m.id.toLowerCase()));
+    if (safe && session.modes?.currentModeId !== safe.id) {
+      await ctx.request(acp.methods.agent.session.setMode, { sessionId: session.sessionId, modeId: safe.id }).catch(() => {});
     }
 
     const sendImages = canImage && images.length > 0;
@@ -163,7 +180,7 @@ export async function runAgent(
         refusal: "AI가 요청을 거절했습니다. 입력 내용을 확인해 주세요.",
         cancelled: "생성이 취소되었습니다.",
       };
-      throw new AgentError("INCOMPLETE", why[res.stopReason] ?? `비정상 종료: ${res.stopReason}`);
+      throw new AgentError("INCOMPLETE", why[res.stopReason] ?? "생성이 비정상적으로 끝났습니다. 다시 시도해 주세요.", res.stopReason);
     }
     return { text, imagesSent: sendImages };
   });
@@ -174,7 +191,7 @@ export async function runAgent(
     if (e instanceof AgentError) throw e;
     const msg = e instanceof Error ? e.message : String(e);
     if (AUTH_RE.test(msg)) throw new AgentError("AUTH_REQUIRED", `${def.label} 로그인이 필요합니다. ${def.loginHelp}`);
-    throw new AgentError("AGENT_ERROR", `${msg} ${stderr.slice(-300)}`.trim());
+    throw new AgentError("AGENT_ERROR", `${def.label} 실행 중 오류가 났습니다. 다시 시도해 주세요.`, `${msg} ${stderr.slice(-300)}`.trim());
   } finally {
     clearTimeout(timer);
     await killTree(child);

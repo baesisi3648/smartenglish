@@ -439,6 +439,7 @@ function Story() {
 
 /* ───────── 오시는 길 · 교습비 ───────── */
 function Visit() {
+  const tuition = academy.tuition.value;
   return (
     <section id="visit" className="mx-auto grid max-w-6xl gap-8 px-4 py-20 sm:px-6 md:grid-cols-2">
       <div>
@@ -475,26 +476,38 @@ function Visit() {
           교습비 안내
           <Verify on={academy.tuition.verify} />
         </h2>
-        <table className="mt-5 w-full text-left">
-          <thead className="border-b-2 border-line text-sm text-ink-soft">
+        <table className="mt-5 w-full text-left text-[15px]">
+          <thead className="border-b-2 border-line text-xs text-ink-soft">
             <tr>
-              <th className="py-2 font-bold">구분</th>
+              <th className="py-2 font-bold">반</th>
               <th className="py-2 font-bold">수업</th>
               <th className="py-2 text-right font-bold">월 교습비</th>
             </tr>
           </thead>
-          <tbody>
-            {academy.tuition.value.map((t) => (
-              <tr key={t.label} className="border-b border-line last:border-0">
-                <td className="py-3 font-extrabold text-hb-navy">{t.label}</td>
-                <td className="py-3">{t.schedule}</td>
-                <td className="py-3 text-right text-lg font-extrabold">{t.amount}</td>
+          {tuition.groups.map((g) => (
+            <tbody key={g.label}>
+              <tr>
+                <th colSpan={3} className="pb-1 pt-4 text-left text-sm font-extrabold text-hb-blue">
+                  {g.label}
+                </th>
               </tr>
-            ))}
-          </tbody>
+              {g.rows.map((r) => (
+                <tr key={r.name} className="border-b border-line">
+                  <td className="py-2 font-extrabold text-hb-navy">{r.name}</td>
+                  <td className="py-2">
+                    {r.minutes}분 × 주 {r.perWeek}회
+                    <span className="block text-xs text-ink-soft">월 {r.monthlyMinutes.toLocaleString("ko-KR")}분</span>
+                  </td>
+                  <td className="py-2 text-right font-extrabold">{r.fee.toLocaleString("ko-KR")}원</td>
+                </tr>
+              ))}
+            </tbody>
+          ))}
         </table>
-        <p className="mt-4 text-xs leading-relaxed text-ink-soft">
-          교재비 별도 · 관할 교육지원청에 신고된 교습비 기준입니다.
+        <p className="mt-4 rounded-xl bg-bg-soft px-4 py-2 text-sm font-bold text-hb-navy">🎁 {tuition.discount}</p>
+        <p className="mt-3 text-xs leading-relaxed text-ink-soft">
+          반별 정원 {tuition.capacity}명 · 월 교습시간은 한 달 {tuition.weeksPerMonth}주 기준 · 관할 교육지원청에 신고된
+          교습비({tuition.filedAt})입니다.
         </p>
       </div>
     </section>

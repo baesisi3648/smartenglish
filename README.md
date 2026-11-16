@@ -57,11 +57,15 @@ npm run build && npm run lint
 ```
 
 ### 스튜디오 보안 메모
-- `/studio`와 생성 API는 **관리자 비밀번호 로그인**이 필요합니다(HMAC 서명 쿠키, 12시간, 비밀번호를 바꾸면 기존 세션은 모두 무효). 같은 IP에서 5회 틀리면 1분간 잠깁니다.
-- ChatGPT·Claude(ACP)는 `STUDIO_ENABLED=1`이고 Vercel이 아닐 때만, 그리고 localhost 출처 요청만 받습니다.
-- Gemini(웹)는 서버에 `GEMINI_API_KEY`가 있을 때만 켜집니다(`GEMINI_MODEL`로 모델 변경, 기본 `gemini-flash-latest`). DeepSeek(웹)는 `DEEPSEEK_API_KEY`가 있을 때만 켜집니다(`DEEPSEEK_MODEL` 기본 `deepseek-flash`, `DEEPSEEK_IMAGES=0`이면 사진 미전송, 사진 입력 거부 시 글만으로 재시도). 웹 AI는 IP당 1시간 20건으로 제한합니다. 웹에서는 사진을 긴 변 1600px JPEG로 줄여 보냅니다(Vercel 요청 4.5MB 한도).
-- 쓸 수 있는 AI가 하나도 없으면 생성 API는 404, `/studio`는 "내 PC 스튜디오 열기" 안내를 보여 줍니다.
-- API는 같은 출처 Origin과 `X-Studio-Request` 헤더가 모두 있을 때만 받습니다(CSRF 차단).
-- 에이전트는 빈 임시 폴더에서 실행되고, 도구 권한 요청은 모두 거절됩니다. 다만 에이전트 자체의 읽기 도구까지 완전히 막지는 못합니다.
-- API 키 환경변수는 자식 프로세스에 넘기지 않습니다. 구독 로그인만 사용합니다.
-- 동시 실행은 1건, 타임아웃은 4분이고, Windows에서는 프로세스 트리째 종료합니다.
+- **로그인**: `/studio`와 생성 API는 관리자 비밀번호 로그인이 필요합니다. 세션은 `STUDIO_SECRET`(32자 이상 무작위, 비밀번호와 독립)으로 서명한 httpOnly 쿠키이고 12시간 유지됩니다. 비밀번호나 서명키를 바꾸면 모든 세션이 무효가 됩니다. 로그아웃은 그 브라우저의 쿠키만 지웁니다.
+- **대입 방지**: 같은 IP에서 5회 틀리면 1분, 전체 합계 10분 30회 실패면 5분간 모든 로그인을 잠급니다.
+- **ChatGPT·Claude(ACP)**: `npm run studio`(127.0.0.1에만 열림, `STUDIO_LOOPBACK=1`)로 띄웠을 때만, localhost 출처 요청만 받습니다. Vercel에서는 항상 꺼집니다.
+  - 자식 프로세스에는 실행에 필요한 환경변수만 넘깁니다(허용 목록). 비밀번호·서명키·API 키는 전달되지 않습니다.
+  - 빈 임시 폴더에서 실행하고, 도구 권한 요청은 모두 거절하며, 지원하면 읽기 전용 모드로 전환합니다. 그래도 에이전트 자체의 읽기 도구까지 완전히 막지는 못하므로, 응답에 서버 비밀값이 섞이면 가린 뒤 돌려줍니다.
+  - 동시 실행은 1건, 타임아웃은 4분이고, Windows에서는 프로세스 트리째 종료합니다.
+- **Gemini·DeepSeek(웹)**: 서버에 `GEMINI_API_KEY` / `DEEPSEEK_API_KEY`가 있을 때만 켜집니다.
+  - 모델 변경: `GEMINI_MODEL`(기본 `gemini-flash-latest`), `DEEPSEEK_MODEL`(기본 `deepseek-flash`). `DEEPSEEK_IMAGES=0`이면 DeepSeek에 사진을 보내지 않고, 사진 입력을 거부하면 글만으로 재시도합니다.
+  - 사용량: IP당 1시간 20건, 전체 1시간 60건, 출력 토큰 상한(Gemini 8192, DeepSeek 4096). 서버 메모리 기준이라 Vercel 인스턴스끼리 공유되지 않으므로 **각 AI 콘솔에서 월 지출 상한도 설정**하세요.
+  - 사진은 화면에서 긴 변 1600px JPEG로 줄여 보내고(Vercel 요청 4.5MB 한도), 서버는 파일 앞부분(시그니처)으로 JPG·PNG·WEBP만 받습니다.
+- **CSRF**: API는 같은 출처 Origin과 `X-Studio-Request` 헤더가 모두 있어야 받습니다(배포 사이트는 https만). 쓸 수 있는 AI가 없으면 생성 API는 404입니다.
+- **오류**: 화면에는 고정 문구와 오류 번호만 보여 주고, 자세한 내용은 비밀값을 가린 뒤 서버 로그(`[studio] 오류번호`)에만 남깁니다.

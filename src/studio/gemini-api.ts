@@ -43,28 +43,29 @@ export async function runGemini(
       headers: { "Content-Type": "application/json", "x-goog-api-key": process.env.GEMINI_API_KEY ?? "" },
       body: JSON.stringify({
         contents: [{ role: "user", parts }],
-        generationConfig: { responseMimeType: "application/json", temperature: 0.8 },
+        // 출력 상한: 본문 400~900자 + JSON 여유 (사고 토큰 포함 모델 대비 넉넉히, 비용 상한 역할)
+        generationConfig: { responseMimeType: "application/json", temperature: 0.8, maxOutputTokens: 8192 },
       }),
       signal: ctrl,
     });
   } catch (e) {
     if (e instanceof Error && e.name === "TimeoutError") throw new AgentError("TIMEOUT", "Gemini 응답 시간 초과");
-    throw new AgentError("AGENT_ERROR", `Gemini 호출 실패: ${e instanceof Error ? e.message : e}`);
+    throw new AgentError("AGENT_ERROR", "Gemini에 연결하지 못했습니다. 잠시 뒤 다시 시도해 주세요.", String(e));
   }
 
   const json = (await res.json().catch(() => ({}))) as GeminiResponse;
   if (!res.ok) {
     const msg = json.error?.message ?? `HTTP ${res.status}`;
     if (res.status === 429) {
-      throw new AgentError("RATE_LIMITED", "Gemini 사용량 한도에 걸렸습니다. 1분쯤 뒤에 다시 시도해 주세요.");
+      throw new AgentError("RATE_LIMITED", "Gemini 사용량 한도에 걸렸습니다. 1분쯤 뒤에 다시 시도해 주세요.", msg);
     }
     if (res.status === 400 && /api key/i.test(msg)) {
-      throw new AgentError("AUTH_REQUIRED", "Gemini API 키가 올바르지 않습니다. 관리자에게 키 설정을 확인해 달라고 해 주세요.");
+      throw new AgentError("AUTH_REQUIRED", "Gemini API 키가 올바르지 않습니다. 관리자에게 키 설정을 확인해 달라고 해 주세요.", msg);
     }
     if (res.status === 403) {
-      throw new AgentError("AUTH_REQUIRED", "Gemini API 키에 권한이 없습니다. 키 설정을 확인해 주세요.");
+      throw new AgentError("AUTH_REQUIRED", "Gemini API 키에 권한이 없습니다. 키 설정을 확인해 주세요.", msg);
     }
-    throw new AgentError("AGENT_ERROR", `Gemini 오류: ${msg}`);
+    throw new AgentError("AGENT_ERROR", "Gemini에서 오류가 났습니다. 다시 시도해 주세요.", `HTTP ${res.status}: ${msg}`);
   }
 
   if (json.promptFeedback?.blockReason) {
@@ -80,7 +81,7 @@ export async function runGemini(
       MAX_TOKENS: "응답이 너무 길어 중간에 끊겼습니다.",
       SAFETY: "Gemini 안전 필터에 걸렸습니다. 입력 내용이나 사진을 확인해 주세요.",
     };
-    throw new AgentError("INCOMPLETE", why[cand.finishReason] ?? `비정상 종료: ${cand.finishReason}`);
+    throw new AgentError("INCOMPLETE", why[cand.finishReason] ?? "생성이 비정상적으로 끝났습니다. 다시 시도해 주세요.", cand.finishReason);
   }
   if (!text.trim()) throw new AgentError("INCOMPLETE", "Gemini가 빈 응답을 보냈습니다. 다시 시도해 주세요.");
   return { text, imagesSent: images.length > 0 };

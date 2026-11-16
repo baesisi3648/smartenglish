@@ -3,7 +3,7 @@
 //  2) 바탕화면에 '블로그 스튜디오' 실행 아이콘 생성 (Windows)
 // 비밀번호를 직접 정하려면: npm run studio:setup -- --password 원하는비밀번호
 // --first-run ('처음 설정.cmd'에서 호출): 프로그램 자동 설치 + 끝에 AI 구독 로그인 안내까지
-import { randomInt } from "node:crypto";
+import { randomBytes, randomInt } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { execFileSync, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -45,8 +45,25 @@ if (given || !has) {
   console.log("\n  🔑 관리자 비밀번호를 설정했습니다 (web/.env.local)");
   console.log(`     비밀번호: ${pw}`);
   console.log("     → 잊지 않게 메모해 두세요. 배포 사이트에서도 쓰려면 Vercel 환경변수 STUDIO_PASSWORD 에 같은 값을 넣으세요.\n");
+  // 화면 기록에 비밀번호가 남지 않도록, 메모했다고 확인하면 화면을 지운다 (대화형 실행일 때만)
+  if (process.stdin.isTTY) {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    await rl.question("  메모했으면 Enter 를 누르세요 (화면에서 비밀번호를 지웁니다) ");
+    rl.close();
+    console.clear();
+    console.log("\n  🔑 관리자 비밀번호 설정 완료 (화면에서 지웠습니다)\n");
+  }
 } else {
   console.log("\n  🔑 관리자 비밀번호가 이미 설정되어 있습니다 (web/.env.local). 바꾸려면 --password 옵션을 쓰세요.\n");
+}
+
+// 1-2) 로그인 쿠키 서명키 (비밀번호와 독립된 32자 이상 무작위 값, 화면에 표시하지 않음)
+env = readFileSync(envPath, "utf8");
+if (!/^STUDIO_SECRET=[A-Za-z0-9_-]{32,}\r?$/m.test(env)) {
+  env = env.replace(/^STUDIO_SECRET=.*\r?\n?/m, "");
+  env = `${env.trimEnd()}${env.trim() ? "\n" : ""}STUDIO_SECRET=${randomBytes(36).toString("base64url")}\n`;
+  writeFileSync(envPath, env, "utf8");
+  console.log("  🔐 로그인 서명키(STUDIO_SECRET)를 만들었습니다.\n");
 }
 
 // 2) 바탕화면 바로가기 (Windows)
