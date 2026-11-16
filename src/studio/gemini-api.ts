@@ -4,7 +4,8 @@ import { AgentError } from "./errors";
 /**
  * Gemini API(REST) 호출 — 웹 데모용.
  * - 키: GEMINI_API_KEY (Google AI Studio에서 발급, 서버 환경변수로만 보관)
- * - 모델: GEMINI_MODEL (기본 gemini-flash-latest: 최신 Flash를 가리키는 별칭)
+ * - 모델: GEMINI_MODEL (기본 gemini-3.5-flash)
+ *   2026-11-16 측정: gemini-flash-latest(=3.8-flash)는 150초 넘게 무응답, 3.5-flash는 약 17초, 2.5-flash는 신규 사용 불가
  */
 const ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models";
 
@@ -14,7 +15,7 @@ export function geminiConfigured() {
 
 export function geminiModel() {
   const m = process.env.GEMINI_MODEL?.trim();
-  return m && /^[a-z0-9.-]+$/.test(m) ? m : "gemini-flash-latest";
+  return m && /^[a-z0-9.-]+$/.test(m) ? m : "gemini-3.5-flash";
 }
 
 type Part = { text: string } | { inline_data: { mime_type: string; data: string } };

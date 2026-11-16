@@ -64,7 +64,7 @@ npm run build && npm run lint
   - 빈 임시 폴더에서 실행하고, 도구 권한 요청은 모두 거절하며, 지원하면 읽기 전용 모드로 전환합니다. 그래도 에이전트 자체의 읽기 도구까지 완전히 막지는 못하므로, 응답에 서버 비밀값이 섞이면 가린 뒤 돌려줍니다.
   - 동시 실행은 1건, 타임아웃은 4분이고, Windows에서는 프로세스 트리째 종료합니다.
 - **Gemini·DeepSeek(웹)**: 서버에 `GEMINI_API_KEY` / `DEEPSEEK_API_KEY`가 있을 때만 켜집니다.
-  - 모델 변경: `GEMINI_MODEL`(기본 `gemini-flash-latest`), `DEEPSEEK_MODEL`(기본 `deepseek-flash`). `DEEPSEEK_IMAGES=0`이면 DeepSeek에 사진을 보내지 않고, 사진 입력을 거부하면 글만으로 재시도합니다.
+  - 모델 변경: `GEMINI_MODEL`(기본 `gemini-3.5-flash`), `DEEPSEEK_MODEL`(기본 `deepseek-flash`). `DEEPSEEK_IMAGES=0`이면 DeepSeek에 사진을 보내지 않고, 사진 입력을 거부하면 글만으로 재시도합니다.
   - 사용량: IP당 1시간 20건, 전체 1시간 60건, 출력 토큰 상한(Gemini 8192, DeepSeek 4096). 서버 메모리 기준이라 Vercel 인스턴스끼리 공유되지 않으므로 **각 AI 콘솔에서 월 지출 상한도 설정**하세요.
   - 사진은 화면에서 긴 변 1600px JPEG로 줄여 보내고(Vercel 요청 4.5MB 한도), 서버는 파일 앞부분(시그니처)으로 JPG·PNG·WEBP만 받습니다.
 - **CSRF**: API는 같은 출처 Origin과 `X-Studio-Request` 헤더가 모두 있어야 받습니다(배포 사이트는 https만). 쓸 수 있는 AI가 없으면 생성 API는 404입니다.
