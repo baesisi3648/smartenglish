@@ -2,15 +2,22 @@
 //  1) 관리자 비밀번호 생성 → web/.env.local (git 제외 파일)
 //  2) 바탕화면에 '블로그 스튜디오' 실행 아이콘 생성 (Windows)
 // 비밀번호를 직접 정하려면: npm run studio:setup -- --password 원하는비밀번호
+// --first-run ('처음 설정.cmd'에서 호출): 프로그램 자동 설치 + 끝에 AI 구독 로그인 안내까지
 import { randomInt } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync, mkdtempSync, rmSync } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
+import { ensureInstalled } from "./ensure-installed.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const envPath = path.join(root, ".env.local");
+const firstRun = process.argv.includes("--first-run");
+
+// 0) 필요한 프로그램 (처음 설정에서만; studio:setup 단독 실행은 기존처럼 설치 생략)
+if (firstRun && !ensureInstalled(root)) process.exit(1);
 
 // 1) 비밀번호
 const argIdx = process.argv.indexOf("--password");
@@ -52,7 +59,7 @@ $sh = New-Object -ComObject WScript.Shell
 $s = $sh.CreateShortcut($lnk)
 $s.TargetPath = '${target.replace(/'/g, "''")}'
 $s.WorkingDirectory = '${root.replace(/'/g, "''")}'
-$s.WindowStyle = 7
+$s.WindowStyle = 1  # 일반 창: 첫 설치 진행/안내 문구가 보이도록 (브라우저가 열리면 자동으로 닫힘)
 $s.Description = '스마트해법영어 백운밸리점 블로그 스튜디오'
 $s.Save()
 Write-Output $lnk
@@ -71,4 +78,26 @@ Write-Output $lnk
   }
 } else {
   console.log("  (Windows가 아니므로 바탕화면 아이콘은 만들지 않았습니다. `npm run studio` 로 실행하세요.)\n");
+}
+
+// 3) AI 구독 로그인 (처음 설정에서만)
+// Gemini 개인 계정 로그인은 Google이 Gemini CLI 지원을 중단해 제외 (2026-11 확인:
+// "This client is no longer supported for Gemini Code Assist for individuals")
+if (firstRun) {
+  const LOGINS = {
+    1: { name: "ChatGPT (Plus/Pro 구독)", cmd: "npx -y @openai/codex login", tip: "브라우저에서 ChatGPT 계정으로 로그인하면 자동으로 끝납니다." },
+    2: { name: "Claude (Pro/Max 구독)", cmd: "npx -y @anthropic-ai/claude-code", tip: "화면이 열리면 /login 입력 → 브라우저에서 승인 → 끝나면 /exit 입력." },
+  };
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  console.log("  글을 써 줄 AI에 구독 계정으로 로그인합니다 (이미 했다면 건너뛰세요).");
+  console.log("   1) ChatGPT   2) Claude   Enter) 건너뛰기");
+  const pick = LOGINS[(await rl.question("  번호를 고르세요: ")).trim()];
+  rl.close();
+  if (pick) {
+    console.log(`\n  ${pick.name} 로그인: ${pick.tip}\n`);
+    spawnSync(pick.cmd, { cwd: tmpdir(), stdio: "inherit", shell: true });
+  } else {
+    console.log("  나중에 하려면 README의 'AI 로그인' 표를 참고하세요.\n");
+  }
+  console.log("\n  🎉 설정 끝! 바탕화면 '블로그 스튜디오' 아이콘을 더블클릭하세요.\n");
 }

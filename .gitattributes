@@ -1,0 +1,2 @@
+# Windows 배치 파일은 CRLF 유지 (LF면 cmd.exe가 오작동할 수 있음)
+*.cmd text eol=crlf

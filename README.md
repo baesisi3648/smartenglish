@@ -3,7 +3,7 @@
 | 구성 | 어디서 실행 | 설명 |
 |---|---|---|
 | 홈페이지 `/` | Vercel 배포 | 학원 소개, 네이버 예약·문자 상담, 블로그 최신 글(RSS, 1시간 갱신) |
-| 블로그 스튜디오 `/studio` | **원장님 PC에서만** | 사진 + 주제 → 블로그 스타일 초안. 구독 AI(Claude / ChatGPT / Gemini)를 ACP로 연결 |
+| 블로그 스튜디오 `/studio` | **원장님 PC에서만** | 사진 + 주제 → 블로그 스타일 초안. 구독 AI(ChatGPT / Claude)를 ACP로 연결 |
 
 학원 정보(주소·전화·교습비 등)는 모두 `src/content/academy.ts` 한 곳에서 관리합니다.
 `verify: true` 항목은 화면에 **[확인 필요]** 배지가 붙습니다.
@@ -11,20 +11,25 @@
 ## 블로그 스튜디오 사용법 (원장님 PC)
 
 ### 1. 처음 한 번 — 준비
-1. [Node.js LTS](https://nodejs.org) 설치
-2. 이 폴더에서 `npm install`
-3. 쓰실 AI **하나 이상**에 구독 계정으로 로그인 (API 키 불필요)
+1. [Node.js LTS](https://nodejs.org) 설치 — **이것만 직접 설치**합니다.
+2. `web` 폴더의 **`처음 설정.cmd`를 더블클릭** → 아래가 순서대로 자동 진행됩니다.
+   - 필요한 프로그램 설치 (`npm install`, 몇 분)
+   - **관리자 비밀번호**를 만들어 화면에 한 번 보여 줌 → 메모해 두세요 (저장 위치 `web/.env.local`)
+   - 바탕화면에 **'블로그 스튜디오'** 아이콘 생성
+   - AI 구독 로그인 (ChatGPT / Claude 중 선택, API 키 불필요)
+   - AI 연결 프로그램은 첫 초안을 만들 때 자동으로 받아 옵니다.
+
+AI 로그인을 나중에 하거나 다른 AI를 추가하려면:
 
 | AI | 로그인 방법 | 필요한 구독 |
 |---|---|---|
-| Gemini | `npx @google/gemini-cli` 실행 → **Login with Google** | Google 계정 |
-| ChatGPT | `npx @openai/codex login` | ChatGPT Plus / Pro |
+| ChatGPT (기본) | `npx @openai/codex login` | ChatGPT Plus / Pro |
 | Claude | `npx @anthropic-ai/claude-code` 실행 → `/login` | Claude Pro / Max |
 
-4. `npm run studio:setup` 실행
-   - **관리자 비밀번호**를 만들어 화면에 한 번 보여 줍니다. 메모해 두세요. 저장 위치는 `web/.env.local`입니다.
-   - 바탕화면에 **'블로그 스튜디오'** 아이콘을 만듭니다.
-   - 비밀번호를 직접 정하려면 `npm run studio:setup -- --password 원하는비밀번호` (8자 이상, `#` `$` 따옴표 공백 불가)
+- 터미널로 하려면 `npm run studio:setup` (설치·AI 로그인 단계 없이 비밀번호와 아이콘만 만듦)
+> Gemini는 지원하지 않습니다. Google이 개인 계정의 Gemini CLI 로그인을 중단했습니다(2026-11 확인).
+
+- 비밀번호를 직접 정하려면 `npm run studio:setup -- --password 원하는비밀번호` (8자 이상, `#` `$` 따옴표 공백 불가)
 
 ### 2. 매번 — 실행
 - 바탕화면 **'블로그 스튜디오'** 아이콘을 더블클릭하면 서버가 켜지고 브라우저가 열립니다. → 비밀번호 입력

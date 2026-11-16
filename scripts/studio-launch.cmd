@@ -1,8 +1,19 @@
 @echo off
-rem Blog Studio launcher: start local studio server if needed, then open the browser.
+rem Blog Studio launcher (desktop icon).
+rem Keep this file ASCII-only: cmd.exe misreads UTF-8 text in batch files.
+rem Node.js check here; install / server start / browser open in studio-open.mjs.
 cd /d "%~dp0.."
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$up = Get-NetTCPConnection -LocalPort 3456 -State Listen -ErrorAction SilentlyContinue;" ^
-  "if (-not $up) { Start-Process -WindowStyle Minimized -FilePath 'cmd.exe' -ArgumentList '/c','npm run studio' -WorkingDirectory (Get-Location) };" ^
-  "for ($i = 0; $i -lt 90; $i++) { try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 'http://localhost:3456/studio' | Out-Null; break } catch { Start-Sleep -Seconds 1 } };" ^
-  "Start-Process 'http://localhost:3456/studio'"
+
+where node >nul 2>nul
+if errorlevel 1 (
+  echo.
+  echo  [!] Node.js is not installed.
+  echo      Install the LTS version from https://nodejs.org and click the icon again.
+  echo.
+  start "" "https://nodejs.org/ko/download"
+  pause
+  exit /b 1
+)
+
+node scripts\studio-open.mjs
+if errorlevel 1 pause

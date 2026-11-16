@@ -39,7 +39,7 @@ export default function StudioClient({
 }) {
   const saved = useSyncExternalStore(noopSubscribe, readSavedAgent, () => null);
   const [picked, setPicked] = useState<string | null>(null);
-  const fallback = agents.find((a) => a.id === "gemini")?.id ?? agents[0].id; // 기본: Gemini
+  const fallback = agents.find((a) => a.id === "chatgpt")?.id ?? agents[0].id; // 기본: ChatGPT
   const agent = picked ?? (saved && agents.some((a) => a.id === saved) ? saved : fallback);
   const [typeId, setTypeId] = useState(postTypes[0].id);
   // null = 아직 고르지 않음 → 글 유형의 기본 키워드 사용

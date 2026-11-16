@@ -52,7 +52,7 @@ async function Gate() {
         <div className="max-w-md rounded-3xl border-2 border-hb-navy bg-white p-8 text-center shadow-[6px_6px_0_var(--hb-blue)]">
           <h1 className="font-display text-2xl text-hb-navy">블로그 스튜디오</h1>
           <p className="mt-3 text-[15px] leading-7 text-ink-soft">
-            글 생성은 원장님 PC의 AI(Gemini·ChatGPT·Claude)로 동작합니다.
+            글 생성은 원장님 PC의 AI(ChatGPT·Claude)로 동작합니다.
             <br />
             바탕화면의 <b className="text-ink">&lsquo;블로그 스튜디오&rsquo;</b> 아이콘을 실행한 뒤 아래 버튼을 눌러
             주세요.
