@@ -1,0 +1,6 @@
+# 비밀값·로컬 산출물은 업로드하지 않음
+.env*
+.next
+node_modules
+.vercel
+*.log

@@ -1,26 +1,87 @@
 @import "tailwindcss";
 
+/* 스마트해법영어 시그니처 컬러 — 블로그 배너/로고에서 추출 */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --hb-navy: #004aad;
+  --hb-blue: #0689d7;
+  --hb-circle: #0b86c2;
+  --hb-yellow: #f8cf07;
+  --hb-coral: #f28f69;
+  --hb-green: #03c75a; /* 네이버 */
+  --ink: #1f2430;
+  --ink-soft: #5f6675;
+  --line: #e3e8ef;
+  --bg-soft: #f3f8fd;
+  color-scheme: light;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-hb-navy: var(--hb-navy);
+  --color-hb-blue: var(--hb-blue);
+  --color-hb-circle: var(--hb-circle);
+  --color-hb-yellow: var(--hb-yellow);
+  --color-hb-coral: var(--hb-coral);
+  --color-hb-green: var(--hb-green);
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-line: var(--line);
+  --color-bg-soft: var(--bg-soft);
+  --font-sans: var(--font-body);
+  --font-display: var(--font-display);
+  --font-round: var(--font-round);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: 4.5rem;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: #ffffff;
+  color: var(--ink);
+  font-family: var(--font-body), system-ui, sans-serif;
+  word-break: keep-all;
+}
+
+/* 배너의 굵은 외곽선 글자 */
+.outline-text {
+  color: #fff;
+  -webkit-text-stroke: 2px #111;
+  paint-order: stroke fill;
+  text-shadow: 3px 3px 0 #111;
+}
+
+.hl {
+  background: linear-gradient(transparent 62%, var(--hb-yellow) 62%);
+}
+
+/* 배너의 파란 세로 프레임 라인 */
+.frame {
+  position: relative;
+}
+.frame::before,
+.frame::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--hb-blue);
+}
+.frame::before {
+  left: 0;
+}
+.frame::after {
+  right: 0;
+}
+
+@keyframes bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+.bob {
+  animation: bob 3.2s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .bob { animation: none; }
 }

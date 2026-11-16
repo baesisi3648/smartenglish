@@ -1,36 +1,58 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 스마트해법영어 백운밸리점 — 홈페이지 + 블로그 스튜디오
 
-## Getting Started
+| 구성 | 어디서 실행 | 설명 |
+|---|---|---|
+| 홈페이지 `/` | Vercel 배포 | 학원 소개, 네이버 예약·문자 상담, 블로그 최신 글(RSS, 1시간 갱신) |
+| 블로그 스튜디오 `/studio` | **원장님 PC에서만** | 사진 + 주제 → 블로그 스타일 초안. 구독 AI(Claude / ChatGPT / Gemini)를 ACP로 연결 |
 
-First, run the development server:
+학원 정보(주소·전화·교습비 등)는 모두 `src/content/academy.ts` 한 곳에서 관리합니다.
+`verify: true` 항목은 화면에 **[확인 필요]** 배지가 붙습니다.
+
+## 블로그 스튜디오 사용법 (원장님 PC)
+
+### 1. 처음 한 번 — 준비
+1. [Node.js LTS](https://nodejs.org) 설치
+2. 이 폴더에서 `npm install`
+3. 쓰실 AI **하나 이상**에 구독 계정으로 로그인 (API 키 불필요)
+
+| AI | 로그인 방법 | 필요한 구독 |
+|---|---|---|
+| Gemini | `npx @google/gemini-cli` 실행 → **Login with Google** | Google 계정 |
+| ChatGPT | `npx @openai/codex login` | ChatGPT Plus / Pro |
+| Claude | `npx @anthropic-ai/claude-code` 실행 → `/login` | Claude Pro / Max |
+
+4. `npm run studio:setup` 실행
+   - **관리자 비밀번호**를 만들어 화면에 한 번 보여 줍니다. 메모해 두세요. 저장 위치는 `web/.env.local`입니다.
+   - 바탕화면에 **'블로그 스튜디오'** 아이콘을 만듭니다.
+   - 비밀번호를 직접 정하려면 `npm run studio:setup -- --password 원하는비밀번호` (8자 이상, `#` `$` 따옴표 공백 불가)
+
+### 2. 매번 — 실행
+- 바탕화면 **'블로그 스튜디오'** 아이콘을 더블클릭하면 서버가 켜지고 브라우저가 열립니다. → 비밀번호 입력
+- 또는 홈페이지 맨 아래 **'관리자'** 링크 → 비밀번호 → **'내 PC 스튜디오 열기'**
+  (배포 사이트에서도 비밀번호를 쓰려면 Vercel 환경변수 `STUDIO_PASSWORD`에 같은 값을 넣습니다)
+- 수동 실행: `npm run studio` → http://localhost:3456/studio
+
+### 3. 글 만들기
+1. AI 선택 → 글 유형 선택 → 내용 입력 (점수·인원·학생 말은 **직접 입력한 것만** 글에 들어갑니다)
+   - **검색 키워드는 여러 개 선택**할 수 있습니다. ★표시된 첫 키워드가 제목 끝 `[ ]`에 들어가고, 나머지는 태그 앞쪽과 본문에 자연스럽게 들어갑니다. 직접 입력도 됩니다(최대 12개).
+2. 사진 올리기 (최대 6장, 올릴 순서대로) → 개인정보 가림·보호자 동의 확인 체크
+3. **초안 만들기** (1~3분) → 제목 / 본문 / 태그 각각 **복사** → 네이버 블로그 에디터에 붙여넣기
+4. 본문의 `[사진N]` 자리에 해당 사진을 올리고, 내용 확인 후 **직접 발행**
+
+> 인사말, `" 감사합니다 "`, 연락처, 주소, 고정 태그는 AI가 아니라 시스템이 `academy.ts`에서 붙입니다.
+
+## 개발
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm run dev      # 홈페이지 개발 서버 (스튜디오 꺼짐)
+npm run studio   # 스튜디오 켜진 개발 서버 (127.0.0.1:3456)
+npm run build && npm run lint
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
-
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+### 스튜디오 보안 메모
+- `/studio`와 생성 API는 **관리자 비밀번호 로그인**이 필요합니다(HMAC 서명 쿠키, 12시간, 비밀번호를 바꾸면 기존 세션은 모두 무효). 같은 IP에서 5회 틀리면 1분간 잠깁니다.
+- `STUDIO_ENABLED=1`이고 Vercel이 아닐 때만 켜집니다. 배포본에서 `/studio`는 404입니다.
+- API는 같은 localhost Origin과 `X-Studio-Request` 헤더가 모두 있을 때만 받습니다(로컬 CSRF 차단).
+- 에이전트는 빈 임시 폴더에서 실행되고, 도구 권한 요청은 모두 거절됩니다. 다만 에이전트 자체의 읽기 도구까지 완전히 막지는 못합니다.
+- API 키 환경변수는 자식 프로세스에 넘기지 않습니다. 구독 로그인만 사용합니다.
+- 동시 실행은 1건, 타임아웃은 4분이고, Windows에서는 프로세스 트리째 종료합니다.
