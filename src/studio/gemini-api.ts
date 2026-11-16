@@ -1,0 +1,87 @@
+import "server-only";
+import { AgentError } from "./errors";
+
+/**
+ * Gemini API(REST) 호출 — 웹 데모용.
+ * - 키: GEMINI_API_KEY (Google AI Studio에서 발급, 서버 환경변수로만 보관)
+ * - 모델: GEMINI_MODEL (기본 gemini-flash-latest: 최신 Flash를 가리키는 별칭)
+ */
+const ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models";
+
+export function geminiConfigured() {
+  return (process.env.GEMINI_API_KEY ?? "").length > 10;
+}
+
+export function geminiModel() {
+  const m = process.env.GEMINI_MODEL?.trim();
+  return m && /^[a-z0-9.-]+$/.test(m) ? m : "gemini-flash-latest";
+}
+
+type Part = { text: string } | { inline_data: { mime_type: string; data: string } };
+type GeminiResponse = {
+  candidates?: { content?: { parts?: { text?: string; thought?: boolean }[] }; finishReason?: string }[];
+  promptFeedback?: { blockReason?: string };
+  error?: { code?: number; status?: string; message?: string };
+};
+
+export async function runGemini(
+  prompt: string,
+  images: { data: string; mimeType: string }[],
+  { timeoutMs = 120_000, signal }: { timeoutMs?: number; signal?: AbortSignal } = {},
+): Promise<{ text: string; imagesSent: boolean }> {
+  const parts: Part[] = [{ text: prompt }];
+  images.forEach((img, i) => {
+    parts.push({ text: `[사진${i + 1}]` });
+    parts.push({ inline_data: { mime_type: img.mimeType, data: img.data } });
+  });
+
+  const ctrl = AbortSignal.any([AbortSignal.timeout(timeoutMs), ...(signal ? [signal] : [])]);
+  let res: Response;
+  try {
+    res = await fetch(`${ENDPOINT}/${geminiModel()}:generateContent`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-goog-api-key": process.env.GEMINI_API_KEY ?? "" },
+      body: JSON.stringify({
+        contents: [{ role: "user", parts }],
+        generationConfig: { responseMimeType: "application/json", temperature: 0.8 },
+      }),
+      signal: ctrl,
+    });
+  } catch (e) {
+    if (e instanceof Error && e.name === "TimeoutError") throw new AgentError("TIMEOUT", "Gemini 응답 시간 초과");
+    throw new AgentError("AGENT_ERROR", `Gemini 호출 실패: ${e instanceof Error ? e.message : e}`);
+  }
+
+  const json = (await res.json().catch(() => ({}))) as GeminiResponse;
+  if (!res.ok) {
+    const msg = json.error?.message ?? `HTTP ${res.status}`;
+    if (res.status === 429) {
+      throw new AgentError("RATE_LIMITED", "Gemini 사용량 한도에 걸렸습니다. 1분쯤 뒤에 다시 시도해 주세요.");
+    }
+    if (res.status === 400 && /api key/i.test(msg)) {
+      throw new AgentError("AUTH_REQUIRED", "Gemini API 키가 올바르지 않습니다. 관리자에게 키 설정을 확인해 달라고 해 주세요.");
+    }
+    if (res.status === 403) {
+      throw new AgentError("AUTH_REQUIRED", "Gemini API 키에 권한이 없습니다. 키 설정을 확인해 주세요.");
+    }
+    throw new AgentError("AGENT_ERROR", `Gemini 오류: ${msg}`);
+  }
+
+  if (json.promptFeedback?.blockReason) {
+    throw new AgentError("INCOMPLETE", "Gemini가 요청을 거절했습니다. 입력 내용이나 사진을 확인해 주세요.");
+  }
+  const cand = json.candidates?.[0];
+  const text = (cand?.content?.parts ?? [])
+    .filter((p) => !p.thought)
+    .map((p) => p.text ?? "")
+    .join("");
+  if (cand?.finishReason && cand.finishReason !== "STOP") {
+    const why: Record<string, string> = {
+      MAX_TOKENS: "응답이 너무 길어 중간에 끊겼습니다.",
+      SAFETY: "Gemini 안전 필터에 걸렸습니다. 입력 내용이나 사진을 확인해 주세요.",
+    };
+    throw new AgentError("INCOMPLETE", why[cand.finishReason] ?? `비정상 종료: ${cand.finishReason}`);
+  }
+  if (!text.trim()) throw new AgentError("INCOMPLETE", "Gemini가 빈 응답을 보냈습니다. 다시 시도해 주세요.");
+  return { text, imagesSent: images.length > 0 };
+}

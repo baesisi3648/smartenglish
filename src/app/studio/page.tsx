@@ -2,9 +2,8 @@ import type { Metadata } from "next";
 import { Suspense } from "react";
 import { cookies } from "next/headers";
 import Link from "next/link";
-import { studioEnabled } from "@/studio/guard";
+import { availableAgents } from "@/studio/guard";
 import { passwordConfigured, verifySessionToken, SESSION_COOKIE } from "@/studio/auth";
-import { AGENT_LIST } from "@/studio/agents";
 import { POST_TYPES, KEYWORD_GROUPS } from "@/studio/post-types";
 import StudioClient from "./studio-client";
 import LoginForm from "./login-form";
@@ -45,8 +44,9 @@ async function Gate() {
     );
   }
 
-  // 배포 사이트: 글 생성은 원장님 PC에서만 가능 → 로컬 스튜디오로 안내
-  if (!studioEnabled()) {
+  // 쓸 수 있는 AI가 없음(배포 사이트 + Gemini 키 없음) → 원장님 PC 스튜디오로 안내
+  const agents = availableAgents();
+  if (agents.length === 0) {
     return (
       <Center>
         <div className="max-w-md rounded-3xl border-2 border-hb-navy bg-white p-8 text-center shadow-[6px_6px_0_var(--hb-blue)]">
@@ -78,7 +78,7 @@ async function Gate() {
 
   return (
     <StudioClient
-      agents={AGENT_LIST.map(({ id, label, plan, loginHelp }) => ({ id, label, plan, loginHelp }))}
+      agents={agents.map(({ id, label, plan, loginHelp }) => ({ id, label, plan, loginHelp }))}
       postTypes={POST_TYPES}
       keywordGroups={KEYWORD_GROUPS}
       logout={logout}

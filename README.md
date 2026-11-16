@@ -3,7 +3,9 @@
 | 구성 | 어디서 실행 | 설명 |
 |---|---|---|
 | 홈페이지 `/` | Vercel 배포 | 학원 소개, 네이버 예약·문자 상담, 블로그 최신 글(RSS, 1시간 갱신) |
-| 블로그 스튜디오 `/studio` | **원장님 PC에서만** | 사진 + 주제 → 블로그 스타일 초안. 구독 AI(ChatGPT / Claude)를 ACP로 연결 |
+| 블로그 스튜디오 `/studio` | 웹(Gemini / DeepSeek API) + 원장님 PC(ChatGPT / Claude 구독, ACP) | 사진 + 주제 → 블로그 스타일 초안 |
+
+> 📘 **처음 쓰는 분은 [스튜디오 설명서](./스튜디오%20설명서.md)를 보세요.** (웹으로 바로 쓰기 / PC 설치 / 글 만들기 / 문제 해결)
 
 학원 정보(주소·전화·교습비 등)는 모두 `src/content/academy.ts` 한 곳에서 관리합니다.
 `verify: true` 항목은 화면에 **[확인 필요]** 배지가 붙습니다.
@@ -56,8 +58,10 @@ npm run build && npm run lint
 
 ### 스튜디오 보안 메모
 - `/studio`와 생성 API는 **관리자 비밀번호 로그인**이 필요합니다(HMAC 서명 쿠키, 12시간, 비밀번호를 바꾸면 기존 세션은 모두 무효). 같은 IP에서 5회 틀리면 1분간 잠깁니다.
-- `STUDIO_ENABLED=1`이고 Vercel이 아닐 때만 켜집니다. 배포본에서 `/studio`는 404입니다.
-- API는 같은 localhost Origin과 `X-Studio-Request` 헤더가 모두 있을 때만 받습니다(로컬 CSRF 차단).
+- ChatGPT·Claude(ACP)는 `STUDIO_ENABLED=1`이고 Vercel이 아닐 때만, 그리고 localhost 출처 요청만 받습니다.
+- Gemini(웹)는 서버에 `GEMINI_API_KEY`가 있을 때만 켜집니다(`GEMINI_MODEL`로 모델 변경, 기본 `gemini-flash-latest`). DeepSeek(웹)는 `DEEPSEEK_API_KEY`가 있을 때만 켜집니다(`DEEPSEEK_MODEL` 기본 `deepseek-flash`, `DEEPSEEK_IMAGES=0`이면 사진 미전송, 사진 입력 거부 시 글만으로 재시도). 웹 AI는 IP당 1시간 20건으로 제한합니다. 웹에서는 사진을 긴 변 1600px JPEG로 줄여 보냅니다(Vercel 요청 4.5MB 한도).
+- 쓸 수 있는 AI가 하나도 없으면 생성 API는 404, `/studio`는 "내 PC 스튜디오 열기" 안내를 보여 줍니다.
+- API는 같은 출처 Origin과 `X-Studio-Request` 헤더가 모두 있을 때만 받습니다(CSRF 차단).
 - 에이전트는 빈 임시 폴더에서 실행되고, 도구 권한 요청은 모두 거절됩니다. 다만 에이전트 자체의 읽기 도구까지 완전히 막지는 못합니다.
 - API 키 환경변수는 자식 프로세스에 넘기지 않습니다. 구독 로그인만 사용합니다.
 - 동시 실행은 1건, 타임아웃은 4분이고, Windows에서는 프로세스 트리째 종료합니다.

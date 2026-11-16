@@ -5,7 +5,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
-import { AGENTS, type AgentId } from "./agents";
+import { ACP_AGENTS, type AcpAgentId } from "./agents";
+import { AgentError } from "./errors";
+
+export { AgentError };
 
 export type PromptImage = { data: string; mimeType: string };
 
@@ -21,20 +24,12 @@ const BLOCKED_ENV = [
   "OPENAI_API_KEY",
   "CODEX_API_KEY",
   "GEMINI_API_KEY",
+  "DEEPSEEK_API_KEY",
   "GOOGLE_API_KEY",
   "GOOGLE_GENAI_USE_VERTEXAI",
   "GOOGLE_APPLICATION_CREDENTIALS",
   "STUDIO_ENABLED",
 ];
-
-export class AgentError extends Error {
-  constructor(
-    public code: "SPAWN_FAILED" | "AUTH_REQUIRED" | "TIMEOUT" | "AGENT_ERROR" | "INCOMPLETE" | "BUSY",
-    message: string,
-  ) {
-    super(message);
-  }
-}
 
 /** 동시에 한 건만 실행 (원장 PC 자원 보호) */
 let busy = false;
@@ -65,13 +60,13 @@ function killTree(child: ChildProcess): Promise<void> {
  *   (주의: 에이전트 내장 읽기 도구까지 완전히 막지는 못함 — 빈 임시 폴더에서 실행)
  */
 export async function runAgent(
-  agentId: AgentId,
+  agentId: AcpAgentId,
   buildPrompt: (canSeeImages: boolean) => string,
   images: PromptImage[],
   { timeoutMs = 240_000, signal }: { timeoutMs?: number; signal?: AbortSignal } = {},
 ): Promise<{ text: string; imagesSent: boolean }> {
   if (busy) throw new AgentError("BUSY", "다른 초안을 생성 중입니다. 끝난 뒤 다시 시도해 주세요.");
-  const def = AGENTS[agentId];
+  const def = ACP_AGENTS[agentId];
   const cwd = await mkdtemp(path.join(tmpdir(), "hb-studio-"));
   busy = true;
   const env = { ...process.env };

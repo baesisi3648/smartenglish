@@ -1,7 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { AGENTS, type AgentId } from "@/studio/agents";
-import { AgentError, runAgent, type PromptImage } from "@/studio/acp-run";
-import { studioEnabled, isTrustedStudioRequest } from "@/studio/guard";
+import { AGENTS, isAgentId } from "@/studio/agents";
+import { runAgent, type PromptImage } from "@/studio/acp-run";
+import { AgentError } from "@/studio/errors";
+import { runDeepseek } from "@/studio/deepseek-api";
+import { runGemini } from "@/studio/gemini-api";
+import { availableAgents, isTrustedStudioRequest, studioEnabled, takeApiQuota } from "@/studio/guard";
 import { verifySessionToken, SESSION_COOKIE } from "@/studio/auth";
 import { getPostType, sanitizeKeywords } from "@/studio/post-types";
 import { buildPrompt, parseDraft } from "@/studio/prompt";
@@ -9,7 +12,8 @@ import { assemble } from "@/studio/template";
 
 export const maxDuration = 300;
 
-const MAX_BODY_BYTES = 35 * 1024 * 1024;
+// Vercel 함수 요청 본문 한도는 4.5MB → 화면에서 사진을 줄여(긴 변 1600px JPEG) 보낸다
+const MAX_BODY_BYTES = process.env.VERCEL ? 4.4 * 1024 * 1024 : 35 * 1024 * 1024;
 const MAX_IMAGES = 6;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_FIELD_CHARS = 2000;
@@ -18,6 +22,7 @@ const IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif
 const STATUS: Record<AgentError["code"], number> = {
   AUTH_REQUIRED: 401,
   BUSY: 409,
+  RATE_LIMITED: 429,
   TIMEOUT: 504,
   INCOMPLETE: 502,
   SPAWN_FAILED: 502,
@@ -30,9 +35,9 @@ function fail(status: number, code: string, error: string) {
 
 const text = (form: FormData, key: string) => String(form.get(key) ?? "").slice(0, MAX_FIELD_CHARS);
 
-/** POST /api/studio/drafts — 블로그 초안 생성 (원장 PC 로컬 전용) */
+/** POST /api/studio/drafts — 블로그 초안 생성 (ChatGPT·Claude: 원장 PC 로컬 전용 / Gemini·DeepSeek: 웹) */
 export async function POST(req: NextRequest) {
-  if (!studioEnabled() || !isTrustedStudioRequest(req.headers)) {
+  if (!studioEnabled() || !isTrustedStudioRequest(req.headers, { local: false })) {
     return fail(404, "NOT_FOUND", "Not found");
   }
   if (!verifySessionToken(req.cookies.get(SESSION_COOKIE)?.value)) {
@@ -42,14 +47,21 @@ export async function POST(req: NextRequest) {
   if (!len || len > MAX_BODY_BYTES) return fail(413, "PAYLOAD_TOO_LARGE", "업로드 용량이 너무 큽니다.");
 
   const form = await req.formData();
-  const agentId = text(form, "agent") as AgentId;
+  const agentId = text(form, "agent");
   const type = getPostType(text(form, "type"));
   const topic = text(form, "topic").trim();
   const memo = text(form, "memo");
   const rawKeywords = form.getAll("keywords").map((v) => String(v));
   const consent = form.get("consent") === "yes";
 
-  if (!AGENTS[agentId]) return fail(400, "INVALID_AGENT", "AI를 선택해 주세요.");
+  if (!isAgentId(agentId) || !availableAgents().some((a) => a.id === agentId)) {
+    return fail(400, "INVALID_AGENT", "AI를 선택해 주세요.");
+  }
+  const def = AGENTS[agentId];
+  // PC에서 프로그램을 실행하는 AI는 localhost 출처 요청만 허용
+  if (def.kind === "acp" && !isTrustedStudioRequest(req.headers, { local: true })) {
+    return fail(404, "NOT_FOUND", "Not found");
+  }
   if (!type) return fail(400, "INVALID_TYPE", "글 유형을 선택해 주세요.");
   if (!topic) return fail(400, "TOPIC_REQUIRED", "주제를 입력해 주세요.");
 
@@ -75,15 +87,24 @@ export async function POST(req: NextRequest) {
   const picked = sanitizeKeywords(rawKeywords);
   const keywords = picked.length > 0 ? picked : [type.defaultKeyword];
 
+  const prompt = (canSee: boolean) =>
+    buildPrompt({ type, topic, values, memo, keywords, imageCount: images.length, imagesAttached: canSee });
+
+  if (def.kind === "api") {
+    const client = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || req.headers.get("x-real-ip") || "local";
+    if (!takeApiQuota(client)) {
+      return fail(429, "RATE_LIMITED", "1시간 동안 만들 수 있는 초안 수(20건)를 넘었습니다. 잠시 뒤 다시 시도해 주세요.");
+    }
+  }
+
   try {
-    // 에이전트의 이미지 지원 여부를 확인한 뒤 프롬프트를 구성 — 생성은 한 번만
-    const run = await runAgent(
-      agentId,
-      (canSee) =>
-        buildPrompt({ type, topic, values, memo, keywords, imageCount: images.length, imagesAttached: canSee }),
-      images,
-      { signal: req.signal },
-    );
+    // ACP: 에이전트의 이미지 지원 여부를 확인한 뒤 프롬프트를 구성 — 생성은 한 번만
+    const run =
+      def.kind === "acp"
+        ? await runAgent(def.id, prompt, images, { signal: req.signal })
+        : def.id === "gemini"
+          ? await runGemini(prompt(true), images, { signal: req.signal })
+          : await runDeepseek(prompt, images, { signal: req.signal });
     const draft = parseDraft(run.text);
     if (!draft) {
       return NextResponse.json(

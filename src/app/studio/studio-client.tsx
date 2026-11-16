@@ -14,6 +14,33 @@ function readSavedAgent() {
 }
 
 type AgentInfo = { id: string; label: string; plan: string; loginHelp: string };
+
+/**
+ * 업로드 전 사진 축소: 긴 변 1600px JPEG(품질 0.82).
+ * 웹 배포(Vercel)는 요청 본문 4.5MB 한도가 있고, AI가 글을 쓰는 데는 이 해상도로 충분하다.
+ * 이미 작은 JPEG는 그대로 보낸다. 실패하면 원본을 보낸다.
+ */
+const MAX_SIDE = 1600;
+async function shrinkImage(file: File): Promise<File> {
+  if (file.type === "image/jpeg" && file.size < 600 * 1024) return file;
+  try {
+    const bmp = await createImageBitmap(file);
+    const scale = Math.min(1, MAX_SIDE / Math.max(bmp.width, bmp.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(bmp.width * scale);
+    canvas.height = Math.round(bmp.height * scale);
+    const ctx = canvas.getContext("2d")!;
+    ctx.fillStyle = "#fff"; // 투명 PNG 배경
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+    bmp.close();
+    const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, "image/jpeg", 0.82));
+    if (!blob || blob.size >= file.size) return file;
+    return new File([blob], file.name.replace(/\.\w+$/, "") + ".jpg", { type: "image/jpeg" });
+  } catch {
+    return file;
+  }
+}
 type Result = {
   title: string;
   body: string;
@@ -88,8 +115,8 @@ export default function StudioClient({
     selectedKeywords.forEach((k) => fd.append("keywords", k));
     fd.set("consent", consent ? "yes" : "no");
     for (const f of type.fields) fd.set(`f_${f.key}`, values[f.key] ?? "");
-    files.forEach((f) => fd.append("images", f));
     try {
+      for (const f of await Promise.all(files.map(shrinkImage))) fd.append("images", f);
       const res = await fetch("/api/studio/drafts", {
         method: "POST",
         body: fd,
@@ -125,7 +152,7 @@ export default function StudioClient({
         <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4">
           <div>
             <p className="font-display text-xl text-hb-navy">블로그 스튜디오</p>
-            <p className="text-xs text-ink-soft">사진 + 주제 → 백운밸리점 블로그 스타일 초안 · 원장님 PC 전용</p>
+            <p className="text-xs text-ink-soft">사진 + 주제 → 백운밸리점 블로그 스타일 초안</p>
           </div>
           <div className="flex items-center gap-4 text-sm font-bold text-hb-navy">
             <Link href="/" className="underline">
@@ -162,7 +189,7 @@ export default function StudioClient({
                   </label>
                 ))}
               </div>
-              <p className="mt-2 text-xs text-ink-soft">처음 한 번 로그인 필요: {selectedAgent.loginHelp}</p>
+              <p className="mt-2 text-xs text-ink-soft">{selectedAgent.loginHelp}</p>
             </Card>
 
             <Card title="2. 글 유형">
