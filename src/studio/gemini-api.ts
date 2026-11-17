@@ -37,26 +37,37 @@ export async function runGemini(
   });
 
   const ctrl = AbortSignal.any([AbortSignal.timeout(timeoutMs), ...(signal ? [signal] : [])]);
-  let res: Response;
-  try {
-    res = await fetch(`${ENDPOINT}/${geminiModel()}:generateContent`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-goog-api-key": process.env.GEMINI_API_KEY ?? "" },
-      body: JSON.stringify({
-        contents: [{ role: "user", parts }],
-        // 출력 상한: 본문 900~1600자 + JSON 여유 (사고 토큰 포함 모델 대비 넉넉히, 비용 상한 역할)
-        generationConfig: { responseMimeType: "application/json", temperature: 0.8, maxOutputTokens: 8192 },
-      }),
-      signal: ctrl,
-    });
-  } catch (e) {
-    if (e instanceof Error && e.name === "TimeoutError") throw new AgentError("TIMEOUT", "Gemini 응답 시간 초과", `model=${geminiModel()} timeout=${timeoutMs}ms`);
-    throw new AgentError("AGENT_ERROR", "Gemini에 연결하지 못했습니다. 잠시 뒤 다시 시도해 주세요.", String(e));
+  const call = async () => {
+    try {
+      return await fetch(`${ENDPOINT}/${geminiModel()}:generateContent`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-goog-api-key": process.env.GEMINI_API_KEY ?? "" },
+        body: JSON.stringify({
+          contents: [{ role: "user", parts }],
+          // 출력 상한: 본문 900~1600자 + JSON 여유 (사고 토큰 포함 모델 대비 넉넉히, 비용 상한 역할)
+          generationConfig: { responseMimeType: "application/json", temperature: 0.8, maxOutputTokens: 8192 },
+        }),
+        signal: ctrl,
+      });
+    } catch (e) {
+      if (e instanceof Error && e.name === "TimeoutError") throw new AgentError("TIMEOUT", "Gemini 응답 시간 초과", `model=${geminiModel()} timeout=${timeoutMs}ms`);
+      throw new AgentError("AGENT_ERROR", "Gemini에 연결하지 못했습니다. 잠시 뒤 다시 시도해 주세요.", String(e));
+    }
+  };
+
+  let res = await call();
+  // 503 = Google 쪽 일시 과부하 → 잠깐 쉬고 한 번만 다시 시도
+  if (res.status === 503) {
+    await new Promise((r) => setTimeout(r, 3000));
+    res = await call();
   }
 
   const json = (await res.json().catch(() => ({}))) as GeminiResponse;
   if (!res.ok) {
     const msg = json.error?.message ?? `HTTP ${res.status}`;
+    if (res.status === 503) {
+      throw new AgentError("AGENT_ERROR", "지금 Gemini 서버가 붐빕니다 (Google 쪽 일시 과부하). 1~2분 뒤 다시 시도하거나 다른 AI를 골라 주세요.", msg);
+    }
     if (res.status === 429) {
       throw new AgentError("RATE_LIMITED", "Gemini 사용량 한도에 걸렸습니다. 1분쯤 뒤에 다시 시도해 주세요.", msg);
     }
