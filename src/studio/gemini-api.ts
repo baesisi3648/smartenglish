@@ -44,7 +44,7 @@ export async function runGemini(
       headers: { "Content-Type": "application/json", "x-goog-api-key": process.env.GEMINI_API_KEY ?? "" },
       body: JSON.stringify({
         contents: [{ role: "user", parts }],
-        // 출력 상한: 본문 400~900자 + JSON 여유 (사고 토큰 포함 모델 대비 넉넉히, 비용 상한 역할)
+        // 출력 상한: 본문 900~1600자 + JSON 여유 (사고 토큰 포함 모델 대비 넉넉히, 비용 상한 역할)
         generationConfig: { responseMimeType: "application/json", temperature: 0.8, maxOutputTokens: 8192 },
       }),
       signal: ctrl,

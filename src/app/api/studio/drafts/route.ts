@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import type { PromptImage } from "@/studio/acp-run";
 import { getStyleExamples } from "@/studio/examples";
+import { MAX_AI_IMAGES } from "@/studio/openai-models";
 import { getPostType, sanitizeKeywords } from "@/studio/post-types";
 import { buildPrompt, parseDraft } from "@/studio/prompt";
 import { checkQuota, checkStudioRequest, errorResponse, fail, resolveAgent, runModel } from "@/studio/request";
@@ -67,17 +68,20 @@ export async function POST(req: NextRequest) {
   const picked = sanitizeKeywords(rawKeywords);
   const keywords = picked.length > 0 ? picked : [type.defaultKeyword];
 
-  // 퓨샷: 같은 유형의 최근 블로그 글 (1시간 캐시, 실패 시 고정 예시)
+  // AI 그림 자리: 그림은 원장님 키로 따로 그리므로 GPT(내 API 키)에서만
+  const aiImages = def.kind === "byok" ? Math.min(MAX_AI_IMAGES, Math.max(0, Number(text(form, "aiImages")) || 0)) : 0;
+
+  // 퓨샷: 대표 글 1편 + 같은 유형 최근 글 1편 (1시간 캐시)
   const examples = await getStyleExamples(type.id);
   const prompt = (canSee: boolean) =>
-    buildPrompt({ type, topic, values, memo, keywords, imageCount: images.length, imagesAttached: canSee, examples });
+    buildPrompt({ type, topic, values, memo, keywords, imageCount: images.length, imagesAttached: canSee, examples, aiImages });
 
   const overQuota = checkQuota(req, def);
   if (overQuota) return overQuota;
 
   try {
     // ACP: 에이전트의 이미지 지원 여부를 확인한 뒤 프롬프트를 구성 — 생성은 한 번만
-    const run = await runModel(def, prompt, images, req.signal);
+    const run = await runModel(agent, prompt, images, req.signal);
     const draft = parseDraft(run.text);
     if (!draft) {
       return NextResponse.json(

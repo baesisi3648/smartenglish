@@ -7,6 +7,8 @@ import { verifySessionToken, SESSION_COOKIE } from "./auth";
 import { runDeepseek } from "./deepseek-api";
 import { AgentError, redactSecrets } from "./errors";
 import { runGemini } from "./gemini-api";
+import { DEFAULT_OPENAI_MODEL, OPENAI_KEY_PATTERN, isOpenAIModel } from "./openai-models";
+import { runOpenAI } from "./openai-api";
 import { availableAgents, isTrustedStudioRequest, studioEnabled, takeApiQuota } from "./guard";
 
 /** 스튜디오 API 라우트(초안·글 추천) 공통: 요청 검사, AI 실행, 오류 응답 */
@@ -26,8 +28,12 @@ export function checkStudioRequest(req: NextRequest) {
   return null;
 }
 
+/** 원장님 본인 키(BYOK) — 헤더로만 받는다 (URL·본문·로그에 남지 않게) */
+export type Byok = { apiKey: string; model: string };
+export type ResolvedAgent = { def: AgentDef; byok?: Byok };
+
 /** 고른 AI 확인. PC 프로그램을 실행하는 AI(ACP)는 localhost 출처만 허용 */
-export function resolveAgent(req: NextRequest, agentId: string): { def: AgentDef } | { error: NextResponse } {
+export function resolveAgent(req: NextRequest, agentId: string): ResolvedAgent | { error: NextResponse } {
   if (!isAgentId(agentId) || !availableAgents().some((a) => a.id === agentId)) {
     return { error: fail(400, "INVALID_AGENT", "AI를 선택해 주세요.") };
   }
@@ -35,10 +41,22 @@ export function resolveAgent(req: NextRequest, agentId: string): { def: AgentDef
   if (def.kind === "acp" && !isTrustedStudioRequest(req.headers, { local: true })) {
     return { error: fail(404, "NOT_FOUND", "Not found") };
   }
+  if (def.kind === "byok") {
+    const byok = readByok(req);
+    if (!byok) return { error: fail(400, "API_KEY_REQUIRED", "OpenAI API 키(sk-로 시작)를 입력해 주세요.") };
+    return { def, byok };
+  }
   return { def };
 }
 
-/** API 키로 부르는 AI는 시간당 사용량 제한 (키 비용 보호). 통과하면 null */
+export function readByok(req: NextRequest): Byok | null {
+  const apiKey = req.headers.get("x-openai-key")?.trim() ?? "";
+  if (!OPENAI_KEY_PATTERN.test(apiKey)) return null;
+  const m = req.headers.get("x-openai-model") ?? "";
+  return { apiKey, model: isOpenAIModel(m) ? m : DEFAULT_OPENAI_MODEL };
+}
+
+/** 서버 API 키로 부르는 AI는 시간당 사용량 제한 (키 비용 보호). 본인 키(BYOK)는 제외. 통과하면 null */
 export function checkQuota(req: NextRequest, def: AgentDef) {
   if (def.kind !== "api") return null;
   const client = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || req.headers.get("x-real-ip") || "local";
@@ -48,7 +66,7 @@ export function checkQuota(req: NextRequest, def: AgentDef) {
 
 /** AI 1회 실행. 출력에 서버 비밀값이 섞여 나오는 경우(프롬프트 주입 등) 대비해 가린 뒤 돌려준다 */
 export async function runModel(
-  def: AgentDef,
+  { def, byok }: ResolvedAgent,
   buildPrompt: (canSeeImages: boolean) => string,
   images: PromptImage[],
   signal: AbortSignal,
@@ -56,9 +74,11 @@ export async function runModel(
   const run =
     def.kind === "acp"
       ? await runAgent(def.id, buildPrompt, images, { signal })
-      : def.id === "gemini"
-        ? await runGemini(buildPrompt(true), images, { signal })
-        : await runDeepseek(buildPrompt, images, { signal });
+      : def.kind === "byok"
+        ? await runOpenAI(buildPrompt(true), images, { apiKey: byok!.apiKey, model: byok!.model, signal })
+        : def.id === "gemini"
+          ? await runGemini(buildPrompt(true), images, { signal })
+          : await runDeepseek(buildPrompt, images, { signal });
   return { text: redactSecrets(run.text), imagesSent: run.imagesSent };
 }
 

@@ -4,15 +4,47 @@ import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import type { PostType } from "@/studio/post-types";
 import type { Plan, PlanIdea, TypeStat } from "@/studio/planner";
+import { figuresOf, parseBody, toEditorHtml, toPlainText } from "@/studio/format";
+import { DEFAULT_OPENAI_MODEL, MAX_AI_IMAGES, OPENAI_KEY_PATTERN, OPENAI_MODELS } from "@/studio/openai-models";
 
 const noopSubscribe = () => () => {};
-function readSavedAgent() {
+/** 브라우저 저장값 읽기 (사생활 모드 등에서 실패하면 null) */
+function readLocal(key: string) {
   try {
-    return localStorage.getItem("hb-studio-agent");
+    return localStorage.getItem(key);
   } catch {
     return null;
   }
 }
+function writeLocal(key: string, value: string | null) {
+  try {
+    if (value === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, value);
+  } catch {}
+}
+const KEY_STORE = "hb-openai-key";
+const MODEL_STORE = "hb-openai-model";
+
+/** 에디터 붙여넣기용: 사진을 긴 변 1200px JPEG data URL로 (원본 그대로 넣으면 클립보드가 너무 커짐) */
+async function toDataUrl(src: string, maxSide = 1200): Promise<string | undefined> {
+  try {
+    const bmp = await createImageBitmap(await (await fetch(src)).blob());
+    const scale = Math.min(1, maxSide / Math.max(bmp.width, bmp.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(bmp.width * scale);
+    canvas.height = Math.round(bmp.height * scale);
+    const ctx = canvas.getContext("2d")!;
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+    bmp.close();
+    return canvas.toDataURL("image/jpeg", 0.85);
+  } catch {
+    return undefined;
+  }
+}
+
+type FigureState = { status: "loading" | "done" | "error"; src?: string; error?: string };
 
 type AgentInfo = { id: string; label: string; plan: string; loginHelp: string };
 
@@ -66,10 +98,26 @@ export default function StudioClient({
   keywordGroups: { label: string; items: string[] }[];
   logout: () => Promise<void>;
 }) {
-  const saved = useSyncExternalStore(noopSubscribe, readSavedAgent, () => null);
+  const saved = useSyncExternalStore(noopSubscribe, () => readLocal(AGENT_KEY), () => null);
   const [picked, setPicked] = useState<string | null>(null);
-  const fallback = agents.find((a) => a.id === "chatgpt")?.id ?? agents[0].id; // 기본: ChatGPT
+  // 기본: PC에서는 ChatGPT(구독), 웹에서는 GPT(내 API 키)
+  const fallback = agents.find((a) => a.id === "chatgpt")?.id ?? agents.find((a) => a.id === "openai")?.id ?? agents[0].id;
   const agent = picked ?? (saved && agents.some((a) => a.id === saved) ? saved : fallback);
+
+  // GPT(내 API 키): 키·모델은 이 브라우저에만 저장 (null = 아직 화면에서 바꾸지 않음 → 저장값 사용)
+  const savedKey = useSyncExternalStore(noopSubscribe, () => readLocal(KEY_STORE), () => null);
+  const savedModel = useSyncExternalStore(noopSubscribe, () => readLocal(MODEL_STORE), () => null);
+  const [keyInput, setKeyInput] = useState<string | null>(null);
+  const [modelPicked, setModelPicked] = useState<string | null>(null);
+  const apiKey = (keyInput ?? savedKey ?? "").trim();
+  const model = modelPicked ?? (OPENAI_MODELS.some((m) => m.id === savedModel) ? savedModel! : DEFAULT_OPENAI_MODEL);
+  const isByok = agent === "openai";
+  const keyOk = OPENAI_KEY_PATTERN.test(apiKey);
+  const byokHeaders: Record<string, string> = isByok ? { "X-OpenAI-Key": apiKey, "X-OpenAI-Model": model } : {};
+  const [aiImages, setAiImages] = useState(false);
+  const [figures, setFigures] = useState<FigureState[]>([]);
+  const [editText, setEditText] = useState(false);
+  const [center, setCenter] = useState(false);
   const [typeId, setTypeId] = useState(postTypes[0].id);
   // null = 아직 고르지 않음 → 글 유형의 기본 키워드 사용
   const [kwPicked, setKwPicked] = useState<string[] | null>(null);
@@ -118,23 +166,61 @@ export default function StudioClient({
     setFiles(next);
   }
 
+  function updateKey(v: string) {
+    setKeyInput(v);
+    writeLocal(KEY_STORE, v.trim() ? v.trim() : null);
+  }
+  function pickModel(id: string) {
+    setModelPicked(id);
+    writeLocal(MODEL_STORE, id);
+  }
+
+  /** 초안의 [그림: …] 자리마다 일러스트를 그린다 (동시에, 실패한 것만 다시 그리기 가능) */
+  async function drawFigure(i: number, desc: string, headers: Record<string, string>) {
+    setFigures((prev) => prev.map((f, k) => (k === i ? { status: "loading" } : f)));
+    try {
+      const res = await fetch("/api/studio/images", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Studio-Request": "1", ...headers },
+        body: JSON.stringify({ description: desc }),
+      });
+      const json = await res.json();
+      setFigures((prev) =>
+        prev.map((f, k) =>
+          k === i ? (json.success ? { status: "done", src: json.data.image } : { status: "error", error: json.error }) : f,
+        ),
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "요청 실패";
+      setFigures((prev) => prev.map((f, k) => (k === i ? { status: "error", error: msg } : f)));
+    }
+  }
+
   async function generate(e: React.FormEvent) {
     e.preventDefault();
+    if (isByok && !keyOk) {
+      setError({ msg: "OpenAI API 키(sk-로 시작)를 1번 칸에 입력해 주세요." });
+      return;
+    }
     setLoading(true);
     setError(null);
     setResult(null);
+    setFigures([]);
+    setEditText(false);
+    const headers = byokHeaders; // 생성 도중 키를 바꿔도 그림은 같은 키로
     const fd = new FormData();
     fd.set("agent", agent);
     fd.set("type", typeId);
     fd.set("topic", topic);
     selectedKeywords.forEach((k) => fd.append("keywords", k));
     fd.set("consent", consent ? "yes" : "no");
+    fd.set("aiImages", isByok && aiImages ? String(MAX_AI_IMAGES) : "0");
     try {
       for (const f of await Promise.all(files.map(shrinkImage))) fd.append("images", f);
       const res = await fetch("/api/studio/drafts", {
         method: "POST",
         body: fd,
-        headers: { "X-Studio-Request": "1" },
+        headers: { "X-Studio-Request": "1", ...headers },
       });
       const json = await res.json();
       if (!json.success) {
@@ -143,6 +229,9 @@ export default function StudioClient({
         // 제출 당시 사진 순서를 결과와 함께 고정 ([사진N] 마커와 일치)
         setResult({ ...json.data, photos: files.map((f) => URL.createObjectURL(f)) });
         setBody(json.data.body);
+        const descs = isByok && aiImages ? figuresOf(json.data.body).slice(0, MAX_AI_IMAGES) : [];
+        setFigures(descs.map(() => ({ status: "loading" })));
+        descs.forEach((d, i) => drawFigure(i, d, headers));
       }
     } catch (err) {
       setError({ msg: err instanceof Error ? err.message : "요청 실패" });
@@ -151,10 +240,35 @@ export default function StudioClient({
     }
   }
 
-  async function copy(label: string, text: string) {
-    await navigator.clipboard.writeText(text);
+  function flash(label: string) {
     setCopied(label);
     setTimeout(() => setCopied(""), 1500);
+  }
+
+  async function copy(label: string, text: string) {
+    await navigator.clipboard.writeText(text);
+    flash(label);
+  }
+
+  /** 네이버 에디터용: 서식(HTML) + 사진·그림을 함께 클립보드에 (붙여넣기 하면 순서대로 들어감) */
+  async function copyForEditor() {
+    if (!result) return;
+    setCopied("에디터-준비");
+    try {
+      const photos = await Promise.all(result.photos.map((p) => toDataUrl(p)));
+      const figs = figures.map((f) => (f.status === "done" ? f.src : undefined));
+      const html = toEditorHtml(body, { photos, figures: figs, center });
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          "text/html": new Blob([html], { type: "text/html" }),
+          "text/plain": new Blob([toPlainText(body)], { type: "text/plain" }),
+        }),
+      ]);
+      flash("에디터");
+    } catch {
+      // 서식 복사를 지원하지 않는 브라우저 → 텍스트만
+      await copy("본문", toPlainText(body));
+    }
   }
 
   const selectedAgent = agents.find((a) => a.id === agent)!;
@@ -204,9 +318,64 @@ export default function StudioClient({
                 ))}
               </div>
               <p className="mt-2 text-xs text-ink-soft">{selectedAgent.loginHelp}</p>
+              {isByok && (
+                <div className="space-y-2 rounded-xl bg-bg-soft p-3">
+                  <label className="block text-sm font-bold">
+                    OpenAI API 키
+                    <div className="mt-1 flex gap-2">
+                      <input
+                        type="password"
+                        autoComplete="off"
+                        spellCheck={false}
+                        value={keyInput ?? savedKey ?? ""}
+                        onChange={(e) => updateKey(e.target.value)}
+                        placeholder="sk-..."
+                        className="min-w-0 flex-1 rounded-lg border border-line bg-white px-3 py-2 font-mono text-sm font-normal"
+                      />
+                      {apiKey && (
+                        <button
+                          type="button"
+                          onClick={() => updateKey("")}
+                          className="rounded-lg border border-line bg-white px-3 text-xs font-bold text-ink-soft"
+                        >
+                          지우기
+                        </button>
+                      )}
+                    </div>
+                  </label>
+                  <p className={`text-xs ${apiKey && !keyOk ? "text-red-600" : "text-ink-soft"}`}>
+                    {apiKey
+                      ? keyOk
+                        ? "✓ 이 브라우저에 저장됨 (공용 PC라면 다 쓴 뒤 '지우기'를 눌러 주세요)"
+                        : "키 형식이 맞지 않습니다. sk-로 시작하는 키 전체를 붙여넣어 주세요."
+                      : "키가 없으면 platform.openai.com → API keys 에서 새로 만들 수 있어요."}
+                  </p>
+                  <label className="block text-sm font-bold">
+                    글쓰기 모델
+                    <select
+                      value={model}
+                      onChange={(e) => pickModel(e.target.value)}
+                      className="mt-1 w-full rounded-lg border border-line bg-white px-3 py-2 text-sm font-normal"
+                    >
+                      {OPENAI_MODELS.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              )}
             </Card>
 
-            <Planner agent={agent} agentLabel={selectedAgent.label} postTypes={postTypes} onUse={applyIdea} />
+            <Planner
+              agent={agent}
+              agentLabel={selectedAgent.label}
+              postTypes={postTypes}
+              onUse={applyIdea}
+              headers={byokHeaders}
+              blocked={isByok && !keyOk ? "OpenAI API 키를 1번 칸에 먼저 입력해 주세요." : ""}
+            />
 
             <Card title="2. 글 유형">
               <div className="grid gap-2 sm:grid-cols-2">
@@ -302,6 +471,22 @@ export default function StudioClient({
                   </span>
                 </label>
               )}
+              {isByok && (
+                <label className="mt-3 flex gap-2 rounded-lg bg-bg-soft p-3 text-xs leading-5">
+                  <input
+                    type="checkbox"
+                    checked={aiImages}
+                    onChange={(e) => setAiImages(e.target.checked)}
+                    className="mt-0.5"
+                  />
+                  <span>
+                    <b className="text-hb-navy">🎨 글 중간에 AI 그림 넣기 (최대 {MAX_AI_IMAGES}장)</b>
+                    <br />
+                    내용을 설명하는 일러스트를 그려 본문 사이에 넣습니다. 실제 수업 사진처럼 보이는 그림은 그리지
+                    않습니다. 그림 1장마다 OpenAI 이미지 요금이 따로 듭니다.
+                  </span>
+                </label>
+              )}
             </Card>
 
             <button
@@ -339,21 +524,112 @@ export default function StudioClient({
               <Out label="제목" onCopy={() => copy("제목", result.title)} copied={copied === "제목"}>
                 <p className="font-extrabold">{result.title}</p>
               </Out>
-              <Out label="본문 (수정 가능)" onCopy={() => copy("본문", body)} copied={copied === "본문"}>
-                <textarea
-                  value={body}
-                  onChange={(e) => setBody(e.target.value)}
-                  className="h-[28rem] w-full resize-y rounded-lg border border-line p-3 text-[14px] leading-6"
-                />
-                <p className="mt-2 text-xs text-ink-soft">
-                  네이버 에디터에 붙여넣은 뒤 <b>[사진N]</b> 위치에 해당 사진을 올려 주세요.
-                  {result.photos.length > 0 && !result.imagesSeen && " (이 AI는 사진을 보지 못해 위치만 표시했습니다)"}
+              <div className="rounded-xl bg-white p-4 ring-1 ring-line">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm font-bold text-ink-soft">본문</p>
+                  <div className="flex gap-1 rounded-full bg-bg-soft p-1 text-xs font-bold">
+                    <button
+                      type="button"
+                      onClick={() => setEditText(false)}
+                      className={`rounded-full px-3 py-1 ${!editText ? "bg-white text-hb-navy shadow" : "text-ink-soft"}`}
+                    >
+                      미리보기
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditText(true)}
+                      className={`rounded-full px-3 py-1 ${editText ? "bg-white text-hb-navy shadow" : "text-ink-soft"}`}
+                    >
+                      글 고치기
+                    </button>
+                  </div>
+                </div>
+                {editText ? (
+                  <>
+                    <textarea
+                      value={body}
+                      onChange={(e) => setBody(e.target.value)}
+                      className="h-[30rem] w-full resize-y rounded-lg border border-line p-3 text-[14px] leading-6"
+                    />
+                    <p className="mt-1 text-xs text-ink-soft">
+                      <code>## </code> 소제목 · <code>&gt; </code> 인용 · <code>[사진N]</code> <code>[그림: …]</code> 이미지
+                      자리
+                    </p>
+                  </>
+                ) : (
+                  <Preview body={body} photos={result.photos} figures={figures} center={center} />
+                )}
+                <div className="mt-4 space-y-2">
+                  <button
+                    type="button"
+                    onClick={copyForEditor}
+                    disabled={copied === "에디터-준비"}
+                    className="w-full rounded-full bg-hb-navy py-3 text-sm font-extrabold text-white disabled:opacity-60"
+                  >
+                    {copied === "에디터"
+                      ? "복사됨 ✓ 네이버 글쓰기 본문에 붙여넣기(Ctrl+V) 하세요"
+                      : copied === "에디터-준비"
+                        ? "사진 준비 중…"
+                        : "📋 네이버 에디터용 복사 (서식 + 사진·그림 포함)"}
+                  </button>
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                    <label className="flex items-center gap-1.5 text-ink-soft">
+                      <input type="checkbox" checked={center} onChange={(e) => setCenter(e.target.checked)} />
+                      가운데 정렬로 복사
+                    </label>
+                    <button type="button" onClick={() => copy("본문", toPlainText(body))} className="font-bold text-hb-navy underline">
+                      {copied === "본문" ? "복사됨 ✓" : "텍스트만 복사"}
+                    </button>
+                  </div>
+                  {figures.some((f) => f.status === "loading") && (
+                    <p className="text-xs text-hb-blue">🎨 그림을 그리는 중입니다 (1장에 30초~1분). 다 그려진 뒤 복사하면 그림도 함께 들어갑니다.</p>
+                  )}
+                </div>
+                <p className="mt-3 text-xs leading-5 text-ink-soft">
+                  {result.photos.length > 0 && !result.imagesSeen && "이 AI는 사진을 보지 못해 위치만 표시했습니다. "}
+                  사진·그림이 붙여넣기로 안 들어가면 <b>[사진N]</b>·<b>[그림N]</b> 자리에 직접 올려 주세요.
                   <br />
-                  {result.examplesUsed > 0
-                    ? `✍️ 블로그 최근 글 ${result.examplesUsed}편의 문체를 참고했습니다.`
-                    : "✍️ 블로그 글을 불러오지 못해 기본 문체 예시로 썼습니다."}
+                  {result.examplesUsed > 1
+                    ? "✍️ 원장님 대표 글 + 블로그 최근 글의 문체를 참고했습니다."
+                    : result.examplesUsed === 1
+                      ? "✍️ 원장님 대표 글의 문체를 참고했습니다. (최근 글은 불러오지 못함)"
+                      : "✍️ 기본 문체 예시로 썼습니다."}
                 </p>
-              </Out>
+              </div>
+              {figures.length > 0 && (
+                <div className="rounded-xl bg-white p-4 ring-1 ring-line">
+                  <p className="mb-2 text-sm font-bold">🎨 AI 그림</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    {figures.map((f, i) => {
+                      const desc = figuresOf(body)[i] ?? "";
+                      return (
+                        <figure key={i} className="text-xs">
+                          {f.status === "done" ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={f.src} alt={desc} className="aspect-[3/2] w-full rounded object-cover" />
+                          ) : (
+                            <div className="grid aspect-[3/2] place-items-center rounded bg-bg-soft p-2 text-center text-ink-soft">
+                              {f.status === "loading" ? "그리는 중…" : (f.error ?? "실패")}
+                            </div>
+                          )}
+                          <figcaption className="mt-1 flex items-center justify-between gap-1">
+                            <span className="font-bold">그림{i + 1}</span>
+                            {f.status === "done" ? (
+                              <a href={f.src} download={`그림${i + 1}.jpg`} className="text-hb-navy underline">
+                                저장
+                              </a>
+                            ) : f.status === "error" && desc ? (
+                              <button type="button" onClick={() => drawFigure(i, desc, byokHeaders)} className="text-hb-navy underline">
+                                다시 그리기
+                              </button>
+                            ) : null}
+                          </figcaption>
+                        </figure>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
               <Out
                 label={`태그 ${result.tags.length}개`}
                 onCopy={() => copy("태그", tagText)}
@@ -587,11 +863,16 @@ function Planner({
   agentLabel,
   postTypes,
   onUse,
+  headers,
+  blocked,
 }: {
   agent: string;
   agentLabel: string;
   postTypes: PostType[];
   onUse: (idea: PlanIdea) => void;
+  headers: Record<string, string>;
+  /** 비어 있지 않으면 추천을 막고 이 안내를 보여 줌 (예: API 키 없음) */
+  blocked: string;
 }) {
   const [memo, setMemo] = useState("");
   const [loading, setLoading] = useState(false);
@@ -600,13 +881,17 @@ function Planner({
   const [used, setUsed] = useState<number | null>(null);
 
   async function run() {
+    if (blocked) {
+      setError(blocked);
+      return;
+    }
     setLoading(true);
     setError("");
     setUsed(null);
     try {
       const res = await fetch("/api/studio/plan", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-Studio-Request": "1" },
+        headers: { "Content-Type": "application/json", "X-Studio-Request": "1", ...headers },
         body: JSON.stringify({ agent, memo }),
       });
       const json = await res.json();
@@ -691,5 +976,67 @@ function Planner({
         </div>
       )}
     </Card>
+  );
+}
+
+/** 본문 미리보기: 서식 표시를 실제 모양(굵은 소제목·인용·사진·그림)으로 */
+function Preview({
+  body,
+  photos,
+  figures,
+  center,
+}: {
+  body: string;
+  photos: string[];
+  figures: FigureState[];
+  center: boolean;
+}) {
+  return (
+    <div
+      className={`max-h-[34rem] overflow-auto rounded-lg border border-line p-4 text-[15px] leading-7 ${center ? "text-center" : ""}`}
+    >
+      {parseBody(body).map((b, i) => {
+        switch (b.kind) {
+          case "blank":
+            return <div key={i} className="h-4" />;
+          case "heading":
+            return (
+              <p key={i} className="mt-1 text-[17px] font-extrabold text-hb-navy">
+                {b.text}
+              </p>
+            );
+          case "quote":
+            return (
+              <p key={i} className="text-ink-soft">
+                {b.text}
+              </p>
+            );
+          case "photo": {
+            const src = photos[b.n - 1];
+            return src ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img key={i} src={src} alt={`사진${b.n}`} className="my-2 inline-block max-h-72 rounded" />
+            ) : (
+              <p key={i} className="my-1 rounded bg-bg-soft py-2 text-center text-xs font-bold text-ink-soft">
+                [사진{b.n}]
+              </p>
+            );
+          }
+          case "figure": {
+            const f = figures[b.n - 1];
+            return f?.status === "done" ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img key={i} src={f.src} alt={b.desc} className="my-2 inline-block max-h-72 rounded" />
+            ) : (
+              <p key={i} className="my-1 rounded border border-dashed border-hb-blue py-2 text-center text-xs text-hb-blue">
+                🎨 그림{b.n} {f?.status === "loading" ? "그리는 중…" : ""} — {b.desc}
+              </p>
+            );
+          }
+          default:
+            return <p key={i}>{b.text}</p>;
+        }
+      })}
+    </div>
   );
 }

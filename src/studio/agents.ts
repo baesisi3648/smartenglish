@@ -2,11 +2,13 @@
  * 스튜디오 AI 레지스트리.
  * - kind "acp": 원장 PC에서 "구독 계정으로 로그인된" CLI를 ACP 어댑터로 띄운다 (API 키 불필요, 로컬 전용).
  * - kind "api": 서버의 API 키(GEMINI_API_KEY / DEEPSEEK_API_KEY)로 호출한다 (웹 데모용, 배포 사이트에서도 동작).
+ * - kind "byok": 원장님이 화면에 넣은 본인 API 키(OpenAI)로 호출한다. 키는 브라우저에만 저장되고 서버는 요청마다 전달만 한다.
  * Gemini CLI(구독 로그인) 방식은 Google이 개인 계정 지원을 중단해 쓰지 않는다 (2026-11 확인).
  */
 export type ApiAgentId = "gemini" | "deepseek";
-export type AgentId = "chatgpt" | "claude" | ApiAgentId;
-export type AcpAgentId = Exclude<AgentId, ApiAgentId>;
+export type ByokAgentId = "openai";
+export type AgentId = "chatgpt" | "claude" | ApiAgentId | ByokAgentId;
+export type AcpAgentId = Exclude<AgentId, ApiAgentId | ByokAgentId>;
 
 type Base = { label: string; plan: string; loginHelp: string };
 export type AcpAgentDef = Base & {
@@ -18,7 +20,8 @@ export type AcpAgentDef = Base & {
   authMethods: string[];
 };
 export type ApiAgentDef = Base & { id: ApiAgentId; kind: "api" };
-export type AgentDef = AcpAgentDef | ApiAgentDef;
+export type ByokAgentDef = Base & { id: ByokAgentId; kind: "byok" };
+export type AgentDef = AcpAgentDef | ApiAgentDef | ByokAgentDef;
 
 export const ACP_AGENTS: Record<AcpAgentId, AcpAgentDef> = {
   chatgpt: {
@@ -59,7 +62,21 @@ export const DEEPSEEK_AGENT: ApiAgentDef = {
   loginHelp: "서버에 등록된 DeepSeek API 키로 동작합니다. 별도 로그인은 필요 없어요.",
 };
 
-export const AGENTS: Record<AgentId, AgentDef> = { ...ACP_AGENTS, gemini: GEMINI_AGENT, deepseek: DEEPSEEK_AGENT };
+export const OPENAI_AGENT: ByokAgentDef = {
+  id: "openai",
+  kind: "byok",
+  label: "GPT (내 API 키)",
+  plan: "OpenAI API 키 · 쓴 만큼 과금 · AI 그림 가능",
+  loginHelp:
+    "platform.openai.com → API keys 에서 만든 키(sk-로 시작)를 아래에 넣어 주세요. 키는 이 브라우저에만 저장되고, 서버는 요청을 전달할 때만 쓰고 저장하지 않습니다.",
+};
+
+export const AGENTS: Record<AgentId, AgentDef> = {
+  ...ACP_AGENTS,
+  gemini: GEMINI_AGENT,
+  deepseek: DEEPSEEK_AGENT,
+  openai: OPENAI_AGENT,
+};
 
 export function isAgentId(id: string): id is AgentId {
   return Object.hasOwn(AGENTS, id);

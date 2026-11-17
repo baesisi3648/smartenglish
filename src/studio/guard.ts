@@ -1,5 +1,5 @@
 import "server-only";
-import { ACP_AGENTS, DEEPSEEK_AGENT, GEMINI_AGENT, type AgentDef } from "./agents";
+import { ACP_AGENTS, DEEPSEEK_AGENT, GEMINI_AGENT, OPENAI_AGENT, type AgentDef } from "./agents";
 import { deepseekConfigured } from "./deepseek-api";
 import { geminiConfigured } from "./gemini-api";
 
@@ -7,6 +7,7 @@ import { geminiConfigured } from "./gemini-api";
  * 스튜디오에서 쓸 수 있는 AI:
  * - ChatGPT·Claude(ACP): 원장 PC에서만. `npm run studio` 가 STUDIO_ENABLED=1 을 설정하고, Vercel에서는 항상 꺼짐.
  * - Gemini·DeepSeek(웹): 서버에 해당 API 키가 있으면 어디서나 (배포 사이트 웹 데모).
+ * - GPT(내 API 키): 원장님이 화면에 키를 넣으면 어디서나 (BYOK — 서버 키 불필요).
  */
 export function localAgentsEnabled() {
   // STUDIO_LOOPBACK=1: scripts/studio.mjs 가 서버를 127.0.0.1 에만 열었다는 표시.
@@ -16,6 +17,7 @@ export function localAgentsEnabled() {
 
 export function availableAgents(): AgentDef[] {
   return [
+    OPENAI_AGENT,
     ...(localAgentsEnabled() ? Object.values(ACP_AGENTS) : []),
     ...(geminiConfigured() ? [GEMINI_AGENT] : []),
     ...(deepseekConfigured() ? [DEEPSEEK_AGENT] : []),

@@ -39,7 +39,7 @@ async function call(content: Content[], signal: AbortSignal) {
         model: deepseekModel(),
         messages: [{ role: "user", content }],
         response_format: { type: "json_object" },
-        max_tokens: 4096, // 출력 상한 (본문 400~900자 + JSON 여유, 비용 상한 역할)
+        max_tokens: 6144, // 출력 상한 (본문 900~1600자 + JSON 여유, 비용 상한 역할)
         temperature: 0.8,
         stream: false,
       }),

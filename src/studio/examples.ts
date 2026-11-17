@@ -3,17 +3,34 @@ import { cacheLife } from "next/cache";
 import { academy } from "@/content/academy";
 import { getLatestPosts } from "@/lib/blog";
 import { TYPE_HINTS } from "./post-types";
+import { referenceFor } from "./reference-posts";
 
 /**
- * 퓨샷 문체 예시: 원장님 블로그의 최근 실제 글을 글 유형별로 골라 프롬프트에 붙인다.
- * - 모델을 학습시키는 것이 아니라, 매번 "이런 글처럼 써 달라"는 예시를 함께 보낸다.
- * - 새 글을 올리면 예시도 자동으로 최신 글로 바뀐다 (1시간 캐시).
- * - 예시 속 사실이 새 글에 섞이지 않도록: 숫자는 ○로 가리고, 인사·끝인사·연락처 부분은 잘라낸다.
- * - 가져오기에 실패하면 빈 배열 → 프롬프트의 고정 예시를 쓴다.
+ * 퓨샷 문체 예시 2편을 프롬프트에 붙인다 (모델 학습이 아니라 매번 "이런 글처럼"을 보여 주는 방식).
+ * 1) 고정 예시: 원장님이 고른 대표 글 중 이 유형에 맞는 1편 (reference-posts.ts) — 구성·길이의 기준
+ * 2) 최신 예시: 블로그 RSS의 같은 유형 최근 글 1편 — 새 글을 올리면 자동으로 바뀜 (1시간 캐시)
+ * 예시 속 사실이 새 글에 섞이지 않도록 숫자는 ○로 가리고(목차 번호·1:1은 유지), 인사·끝인사·연락처는 잘라 낸다.
  */
 
-const MAX_EXAMPLES = 2;
-const MAX_CHARS = 1100;
+const MAX_CHARS = 1800;
+
+/** 점수·연도·학년·인원 같은 숫자 사실만 가린다. 줄 앞 목차 번호("1. ")와 "1:1 맞춤"은 글 구성이라 남긴다 */
+export function maskFacts(text: string) {
+  return text
+    .split("\n")
+    .map((line) => {
+      const lead = line.match(/^\d{1,2}\.\s/)?.[0] ?? "";
+      const rest = line
+        .slice(lead.length)
+        .replace(/1:1/g, "\u0000")
+        .replace(/\d+/g, "○")
+        .replace(/\u0000/g, "1:1");
+      return lead + rest;
+    })
+    .join("\n");
+}
+
+const clip = (s: string) => (s.length > MAX_CHARS ? `${s.slice(0, MAX_CHARS).replace(/\n[^\n]*$/, "")}\n(…이하 생략)` : s);
 
 /** 모바일 글 페이지에서 본문 문단만 추출 (빈 문단 = 빈 줄 유지) */
 function extractBody(html: string) {
@@ -39,17 +56,15 @@ function cleanExample(title: string, paras: string[]) {
   if (lines[0] && title.startsWith(lines[0].slice(0, 10))) lines.shift();
   // 인사말 제거 (시스템이 붙임)
   while (lines.length && (lines[0] === "" || /^안녕하세요|스마트해법영어\s*백운밸리점입니다/.test(lines[0]))) lines.shift();
-  // 끝인사·연락처 이후 잘라냄
-  const end = lines.findIndex((l) => /감사합니다|문의|상담|0507|010-|오시는 길|주소/.test(l));
+  // 끝인사·연락처 이후 잘라냄 ("상담" 같은 단어는 본문 중간에도 나오므로 끝인사·연락처 표시만 본다)
+  const end = lines.findIndex((l) => /감사합니다|📞|0507-|010-|오시는 길|위치\s*:/.test(l));
   if (end > 3) lines = lines.slice(0, end);
   // 연속 빈 줄 정리
   const text = lines
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
-  // 숫자 가리기 (점수·학년·날짜·인원 등 사실이 새 글로 옮겨 가지 않게)
-  const masked = text.replace(/\d+/g, "○");
-  return masked.length > MAX_CHARS ? `${masked.slice(0, MAX_CHARS).replace(/\n[^\n]*$/, "")}\n(…이하 생략)` : masked;
+  return clip(maskFacts(text));
 }
 
 async function fetchPostBody(link: string) {
@@ -68,23 +83,25 @@ export async function getStyleExamples(typeId: string): Promise<string[]> {
   "use cache";
   cacheLife("hours");
 
+  const ref = referenceFor(typeId);
+  const fixed = clip(maskFacts(ref.body));
   try {
     const posts = await getLatestPosts(30);
     const hint = TYPE_HINTS[typeId];
-    const matched = hint ? posts.filter((p) => hint.test(`${p.title} ${p.category ?? ""}`)) : [];
-    // 같은 유형 글 우선, 모자라면 최신 글로 채움
-    const picked = [...matched, ...posts.filter((p) => !matched.includes(p))].slice(0, MAX_EXAMPLES + 2);
+    const sameAsRef = (title: string) => title.replace(/\s/g, "").startsWith(ref.title.replace(/\s/g, "").slice(0, 12));
+    const pool = posts.filter((p) => !sameAsRef(p.title));
+    const matched = hint ? pool.filter((p) => hint.test(`${p.title} ${p.category ?? ""}`)) : [];
+    // 같은 유형 최근 글 우선, 없으면 가장 최근 글
+    const picked = [...matched, ...pool.filter((p) => !matched.includes(p))].slice(0, 3);
 
-    const out: string[] = [];
     for (const p of picked) {
-      if (out.length >= MAX_EXAMPLES) break;
       const paras = await fetchPostBody(p.link).catch(() => []);
       if (paras.length < 5) continue;
       const ex = cleanExample(p.title, paras);
-      if (ex.length > 200) out.push(ex);
+      if (ex.length > 200) return [fixed, ex];
     }
-    return out;
   } catch {
-    return [];
+    /* 최신 글을 못 가져오면 고정 예시만 */
   }
+  return [fixed];
 }

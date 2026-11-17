@@ -40,7 +40,7 @@ export async function POST(req: NextRequest) {
   try {
     // 2) 판단: AI가 이번 주 글 3개 제안
     const prompt = buildPlanPrompt({ today, seasons, analysis, postsAnalyzed: posts.length, memo });
-    const run = await runModel(def, () => prompt, [], req.signal);
+    const run = await runModel(agent, () => prompt, [], req.signal);
     const plan = parsePlan(run.text);
     if (!plan) {
       return NextResponse.json(
