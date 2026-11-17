@@ -172,7 +172,7 @@ function Hero() {
           <a href="#visit" className="flex items-center gap-3 hover:underline">
             <span className="grid size-9 shrink-0 place-items-center rounded-full bg-white text-hb-navy">📍</span>
             <span className="leading-tight">
-              해링턴플레이스 1단지 상가 2층 201호
+              {address.detail.replace("해링턴플레이스1단지", "해링턴플레이스 1단지")}
               <span className="block text-sm text-white/70">({address.landmark})</span>
             </span>
           </a>
