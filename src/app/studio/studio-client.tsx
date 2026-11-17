@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import type { PostType } from "@/studio/post-types";
+import type { Plan, PlanIdea, TypeStat } from "@/studio/planner";
 
 const noopSubscribe = () => () => {};
 function readSavedAgent() {
@@ -91,6 +92,22 @@ export default function StudioClient({
     try {
       localStorage.setItem(AGENT_KEY, id);
     } catch {}
+  }
+
+  /** 플래너 제안 → 글 유형·주제·키워드 채우고 주제 칸으로 이동 */
+  function applyIdea(idea: PlanIdea) {
+    setTypeId(idea.type);
+    setKwPicked(idea.keywords.length > 0 ? idea.keywords : null);
+    const lines = [idea.title, ...idea.outline.map((o) => `- ${o}`)];
+    if (idea.needs.length) {
+      lines.push("", "[실제 사실 — 채운 내용만 글에 들어갑니다]", ...idea.needs.map((n) => `· ${n}: `));
+    }
+    setTopic(lines.join("\n"));
+    requestAnimationFrame(() => {
+      const el = document.getElementById("topic-input") as HTMLTextAreaElement | null;
+      el?.scrollIntoView({ behavior: "smooth", block: "center" });
+      el?.focus({ preventScroll: true });
+    });
   }
 
   function move(i: number, d: -1 | 1) {
@@ -189,6 +206,8 @@ export default function StudioClient({
               <p className="mt-2 text-xs text-ink-soft">{selectedAgent.loginHelp}</p>
             </Card>
 
+            <Planner agent={agent} agentLabel={selectedAgent.label} postTypes={postTypes} onUse={applyIdea} />
+
             <Card title="2. 글 유형">
               <div className="grid gap-2 sm:grid-cols-2">
                 {postTypes.map((t) => (
@@ -209,6 +228,7 @@ export default function StudioClient({
 
             <Card title="3. 주제 및 내용 · 요청사항">
               <Input
+                id="topic-input"
                 label="무엇에 대한 글인지, 넣고 싶은 내용과 요청사항을 자유롭게 적어 주세요"
                 required
                 long
@@ -373,6 +393,7 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
 }
 
 function Input({
+  id,
   label,
   value,
   onChange,
@@ -380,6 +401,7 @@ function Input({
   required,
   long,
 }: {
+  id?: string;
   label: string;
   value: string;
   onChange: (v: string) => void;
@@ -393,6 +415,7 @@ function Input({
       {label} {required && <span className="text-red-500">*</span>}
       {long ? (
         <textarea
+          id={id}
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder={placeholder}
@@ -553,5 +576,120 @@ function KeywordPicker({
         </div>
       )}
     </div>
+  );
+}
+
+type PlanResult = Plan & { context: { postsAnalyzed: number; last30: number; seasons: string[]; types: TypeStat[] } };
+
+/** 콘텐츠 플래너: 시기·블로그 현황을 보고 이번 주 글 3개 추천 → 고르면 아래 칸이 채워짐 */
+function Planner({
+  agent,
+  agentLabel,
+  postTypes,
+  onUse,
+}: {
+  agent: string;
+  agentLabel: string;
+  postTypes: PostType[];
+  onUse: (idea: PlanIdea) => void;
+}) {
+  const [memo, setMemo] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [plan, setPlan] = useState<PlanResult | null>(null);
+  const [used, setUsed] = useState<number | null>(null);
+
+  async function run() {
+    setLoading(true);
+    setError("");
+    setUsed(null);
+    try {
+      const res = await fetch("/api/studio/plan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Studio-Request": "1" },
+        body: JSON.stringify({ agent, memo }),
+      });
+      const json = await res.json();
+      if (json.success) setPlan(json.data);
+      else setError(json.error);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "요청 실패");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <Card title="✨ 이번 주 뭐 쓸까? (선택)">
+      <p className="text-xs leading-5 text-ink-soft">
+        다가오는 시기(시험·방학·행사)와 블로그 최근 글을 AI가 살펴보고, 이번 주에 올리면 좋을 글 3개를
+        추천합니다. 마음에 드는 걸 고르면 아래 칸이 채워집니다.
+      </p>
+      <Input
+        label="이번 주 상황 (선택)"
+        value={memo}
+        onChange={setMemo}
+        placeholder="예) 다음 주부터 기말고사 대비 시작, 겨울방학 특강 모집 예정"
+      />
+      <button
+        type="button"
+        onClick={run}
+        disabled={loading}
+        className="w-full rounded-full border-2 border-hb-navy bg-white py-2.5 text-sm font-extrabold text-hb-navy disabled:opacity-60"
+      >
+        {loading ? `${agentLabel}가 블로그를 살펴보는 중…` : plan ? "🔄 다시 추천 받기" : "💡 글 추천 받기"}
+      </button>
+      {error && <p className="rounded-lg bg-red-50 p-3 text-xs text-red-800 ring-1 ring-red-200">{error}</p>}
+      {plan && (
+        <div className="space-y-3">
+          <div className="rounded-lg bg-bg-soft p-3 text-xs leading-5">
+            <p className="font-bold text-hb-navy">
+              📊 블로그 최근 글 {plan.context.postsAnalyzed}편 분석 · 최근 30일 {plan.context.last30}편
+            </p>
+            {plan.context.seasons.length > 0 && <p className="mt-1">📅 다가오는 시기: {plan.context.seasons.join(", ")}</p>}
+            <p className="mt-1 text-ink-soft">
+              {plan.context.types
+                .map((t) => `${t.emoji} ${t.label.split(" · ")[0]} ${t.daysAgo === null ? "없음" : `${t.daysAgo}일 전`}`)
+                .join("  ·  ")}
+            </p>
+          </div>
+          {plan.summary && <p className="text-sm font-bold leading-6">{plan.summary}</p>}
+          {plan.ideas.map((idea, i) => {
+            const t = postTypes.find((p) => p.id === idea.type);
+            return (
+              <div key={i} className={`rounded-xl border-2 p-4 ${used === i ? "border-hb-blue bg-bg-soft" : "border-line"}`}>
+                <p className="text-xs font-bold text-hb-blue">
+                  {t?.emoji} {t?.label}
+                </p>
+                <p className="mt-1 font-extrabold">{idea.title}</p>
+                <p className="mt-1 text-xs leading-5 text-ink-soft">💬 {idea.reason}</p>
+                {idea.outline.length > 0 && (
+                  <ul className="mt-2 list-disc space-y-0.5 pl-5 text-[13px] leading-5">
+                    {idea.outline.map((o) => (
+                      <li key={o}>{o}</li>
+                    ))}
+                  </ul>
+                )}
+                {idea.needs.length > 0 && (
+                  <p className="mt-2 rounded bg-amber-50 px-2 py-1 text-xs leading-5 text-amber-900">
+                    ✏️ 원장님이 채워 주실 내용: {idea.needs.join(" / ")}
+                  </p>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUsed(i);
+                    onUse(idea);
+                  }}
+                  className="mt-3 rounded-full bg-hb-navy px-4 py-1.5 text-xs font-bold text-white"
+                >
+                  {used === i ? "✓ 아래에 채웠어요" : "이 주제로 쓰기 ↓"}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Card>
   );
 }

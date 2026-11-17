@@ -105,3 +105,18 @@ export function sanitizeKeywords(raw: string[]) {
 export function getPostType(id: string) {
   return POST_TYPES.find((t) => t.id === id);
 }
+
+/** 기존 블로그 글 제목·카테고리로 글 유형을 추정하는 단서 (퓨샷 예시 고르기, 콘텐츠 플래너 분석) */
+export const TYPE_HINTS: Record<string, RegExp> = {
+  exam: /시험|중간고사|기말|내신|분석|성적|기출/,
+  growth: /성장|변화|습관|수상|award|반복|결과|달라|자기주도/i,
+  event: /이벤트|무료|체험|모집|할인|설명회|오픈|신규/,
+  season: /할로윈|크리스마스|파티|방학|행사|데이|여름|겨울|봄|가을/,
+  column: /수능|기초|중요|왜|방법|공부법|학부모|고민/,
+};
+
+/** 글 하나의 유형 추정. 여러 단서가 겹치면 모집 → 시험 → 시즌 → 성장 → 칼럼 순으로 본다 (없으면 null) */
+const CLASSIFY_ORDER = ["event", "exam", "season", "growth", "column"];
+export function classifyPost(text: string): string | null {
+  return CLASSIFY_ORDER.find((id) => TYPE_HINTS[id].test(text)) ?? null;
+}

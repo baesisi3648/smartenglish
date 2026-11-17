@@ -2,6 +2,7 @@ import "server-only";
 import { cacheLife } from "next/cache";
 import { academy } from "@/content/academy";
 import { getLatestPosts } from "@/lib/blog";
+import { TYPE_HINTS } from "./post-types";
 
 /**
  * 퓨샷 문체 예시: 원장님 블로그의 최근 실제 글을 글 유형별로 골라 프롬프트에 붙인다.
@@ -10,14 +11,6 @@ import { getLatestPosts } from "@/lib/blog";
  * - 예시 속 사실이 새 글에 섞이지 않도록: 숫자는 ○로 가리고, 인사·끝인사·연락처 부분은 잘라낸다.
  * - 가져오기에 실패하면 빈 배열 → 프롬프트의 고정 예시를 쓴다.
  */
-
-const TYPE_HINTS: Record<string, RegExp> = {
-  exam: /시험|중간고사|기말|내신|분석|성적|기출/,
-  growth: /성장|변화|습관|수상|award|반복|결과|달라|자기주도/i,
-  event: /이벤트|무료|체험|모집|할인|설명회|오픈|신규/,
-  season: /할로윈|크리스마스|파티|방학|행사|데이|여름|겨울|봄|가을/,
-  column: /수능|기초|중요|왜|방법|공부법|학부모|고민/,
-};
 
 const MAX_EXAMPLES = 2;
 const MAX_CHARS = 1100;
