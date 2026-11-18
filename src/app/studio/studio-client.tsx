@@ -86,6 +86,8 @@ type Result = {
   keywords: string[];
   /** 초안을 만들 때 적은 주제·내용 (수정 요청 때 사실 근거로 함께 보냄) */
   topic: string;
+  /** 자동 글(원장님 입력 없이 작성) 여부 */
+  auto?: boolean;
 };
 
 /** 수정 요청 빠른 버튼 */
@@ -207,8 +209,18 @@ export default function StudioClient({
     }
   }
 
-  async function generate(e: React.FormEvent) {
+  function generate(e: React.FormEvent) {
     e.preventDefault();
+    runDraft({ mode: "manual", type: typeId, topic, keywords: selectedKeywords });
+  }
+
+  /** ⚡ 자동 글: 원장님 입력 없이 확인된 교습소 정보 + 일반 교육 이야기로 바로 올릴 글 (주제·유형은 선택) */
+  function autoWrite(opts: { type?: string; topic?: string; keywords?: string[] } = {}) {
+    runDraft({ mode: "auto", type: opts.type ?? "", topic: opts.topic ?? "", keywords: opts.keywords ?? [] });
+    requestAnimationFrame(() => document.getElementById("result")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  }
+
+  async function runDraft(req: { mode: "manual" | "auto"; type: string; topic: string; keywords: string[] }) {
     if (isByok && !keyOk) {
       setError({ msg: "OpenAI API 키(sk-로 시작)를 1번 칸에 입력해 주세요." });
       return;
@@ -221,9 +233,10 @@ export default function StudioClient({
     const headers = byokHeaders; // 생성 도중 키를 바꿔도 그림은 같은 키로
     const fd = new FormData();
     fd.set("agent", agent);
-    fd.set("type", typeId);
-    fd.set("topic", topic);
-    selectedKeywords.forEach((k) => fd.append("keywords", k));
+    fd.set("mode", req.mode);
+    fd.set("type", req.type);
+    fd.set("topic", req.topic);
+    req.keywords.forEach((k) => fd.append("keywords", k));
     fd.set("consent", consent ? "yes" : "no");
     fd.set("aiImages", isByok && aiImages ? String(MAX_AI_IMAGES) : "0");
     try {
@@ -238,7 +251,7 @@ export default function StudioClient({
         setError({ msg: json.error, raw: json.raw });
       } else {
         // 제출 당시 사진 순서를 결과와 함께 고정 ([사진N] 마커와 일치)
-        setResult({ ...json.data, topic, photos: files.map((f) => URL.createObjectURL(f)) });
+        setResult({ ...json.data, topic: req.topic, photos: files.map((f) => URL.createObjectURL(f)) });
         setHistory([]);
         setRevMsg(null);
         setBody(json.data.body);
@@ -442,7 +455,27 @@ export default function StudioClient({
               )}
             </Card>
 
+            <div className="rounded-2xl bg-hb-navy p-5 text-white">
+              <p className="font-round text-lg">⚡ 바로 한 편 쓰기</p>
+              <p className="mt-1 text-xs leading-5 text-white/80">
+                원장님이 따로 적지 않아도, 교습소 수업 방식·과정 같은 <b>확인된 정보</b>와 지금 시기에 맞는 교육
+                이야기로 그대로 올릴 수 있는 글을 씁니다. 주제도 AI가 최근 글과 겹치지 않게 정합니다.
+              </p>
+              <button
+                type="button"
+                onClick={() => autoWrite()}
+                disabled={loading}
+                className="mt-3 w-full rounded-full bg-hb-yellow py-3 text-sm font-extrabold text-ink disabled:opacity-60"
+              >
+                {loading ? `${selectedAgent.label}가 글을 쓰는 중…` : "⚡ 알아서 한 편 쓰기"}
+              </button>
+              <p className="mt-2 text-[11px] leading-4 text-white/60">
+                성적·인원·이벤트·날짜 같은 사실은 넣지 않습니다. 그런 소식은 아래 3번 칸에 적어서 만들어 주세요.
+              </p>
+            </div>
+
             <Planner
+              onAuto={(idea) => autoWrite({ type: idea.type, topic: [idea.title, ...idea.outline].join("\n"), keywords: idea.keywords })}
               agent={agent}
               agentLabel={selectedAgent.label}
               postTypes={postTypes}
@@ -573,7 +606,7 @@ export default function StudioClient({
         </form>
 
         {/* ── 결과 ── */}
-        <section className="lg:sticky lg:top-4 lg:self-start">
+        <section id="result" className="scroll-mt-4 lg:sticky lg:top-4 lg:self-start">
           {!result && !error && (
             <div className="grid min-h-80 place-items-center rounded-2xl border-2 border-dashed border-line bg-white p-8 text-center text-sm text-ink-soft">
               왼쪽을 채우고 &lsquo;초안 만들기&rsquo;를 누르면
@@ -590,6 +623,11 @@ export default function StudioClient({
           )}
           {result && (
             <div className="space-y-4">
+              {result.auto && (
+                <p className="rounded-xl bg-hb-navy px-4 py-2 text-xs font-bold text-white">
+                  ⚡ 자동 글 — 확인된 교습소 정보와 일반 교육 이야기로만 썼습니다. 한 번 읽어 보고 바로 올리셔도 됩니다.
+                </p>
+              )}
               {result.notes && (
                 <div className="rounded-xl bg-amber-50 p-4 text-sm text-amber-900 ring-1 ring-amber-200">
                   <b>확인해 주세요:</b> {result.notes}
@@ -991,6 +1029,7 @@ type PlanResult = Plan & { context: { postsAnalyzed: number; last30: number; sea
 
 /** 콘텐츠 플래너: 시기·블로그 현황을 보고 이번 주 글 3개 추천 → 고르면 아래 칸이 채워짐 */
 function Planner({
+  onAuto,
   agent,
   agentLabel,
   postTypes,
@@ -1002,6 +1041,8 @@ function Planner({
   agentLabel: string;
   postTypes: PostType[];
   onUse: (idea: PlanIdea) => void;
+  /** 이 주제로 자동 글 바로 쓰기 (원장님 입력 없이) */
+  onAuto: (idea: PlanIdea) => void;
   headers: Record<string, string>;
   /** 비어 있지 않으면 추천을 막고 이 안내를 보여 줌 (예: API 키 없음) */
   blocked: string;
@@ -1089,19 +1130,28 @@ function Planner({
                 )}
                 {idea.needs.length > 0 && (
                   <p className="mt-2 rounded bg-amber-50 px-2 py-1 text-xs leading-5 text-amber-900">
-                    ✏️ 원장님이 채워 주실 내용: {idea.needs.join(" / ")}
+                    ✏️ 채우면 더 좋아지는 내용: {idea.needs.join(" / ")}
                   </p>
                 )}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setUsed(i);
-                    onUse(idea);
-                  }}
-                  className="mt-3 rounded-full bg-hb-navy px-4 py-1.5 text-xs font-bold text-white"
-                >
-                  {used === i ? "✓ 아래에 채웠어요" : "이 주제로 쓰기 ↓"}
-                </button>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => onAuto(idea)}
+                    className="rounded-full bg-hb-yellow px-4 py-1.5 text-xs font-extrabold text-ink"
+                  >
+                    ⚡ 바로 쓰기
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setUsed(i);
+                      onUse(idea);
+                    }}
+                    className="rounded-full bg-hb-navy px-4 py-1.5 text-xs font-bold text-white"
+                  >
+                    {used === i ? "✓ 아래에 채웠어요" : "정보 채워서 쓰기 ↓"}
+                  </button>
+                </div>
               </div>
             );
           })}

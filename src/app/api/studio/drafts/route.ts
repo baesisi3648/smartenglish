@@ -3,7 +3,10 @@ import type { PromptImage } from "@/studio/acp-run";
 import { getStyleExamples } from "@/studio/examples";
 import { MAX_AI_IMAGES } from "@/studio/openai-models";
 import { getPostType, sanitizeKeywords } from "@/studio/post-types";
-import { buildPrompt, parseDraft } from "@/studio/prompt";
+import { getLatestPosts } from "@/lib/blog";
+import { academyFacts } from "@/studio/facts";
+import { todayKst, upcomingSeasons } from "@/studio/planner";
+import { buildPrompt, parseDraft, type AutoContext } from "@/studio/prompt";
 import { checkQuota, checkStudioRequest, errorResponse, fail, resolveAgent, runModel } from "@/studio/request";
 import { assemble } from "@/studio/template";
 
@@ -32,7 +35,9 @@ export async function POST(req: NextRequest) {
   if (!len || len > MAX_BODY_BYTES) return fail(413, "PAYLOAD_TOO_LARGE", "업로드 용량이 너무 큽니다.");
 
   const form = await req.formData();
-  const type = getPostType(text(form, "type"));
+  // auto = 자동 글 (원장님 입력 없이 확인된 정보로). 유형이 없으면 칼럼, 주제가 없으면 AI가 정함
+  const auto = text(form, "mode") === "auto";
+  const type = getPostType(text(form, "type")) ?? (auto ? getPostType("column") : undefined);
   const topic = text(form, "topic").trim();
   const memo = text(form, "memo");
   const rawKeywords = form.getAll("keywords").map((v) => String(v));
@@ -42,7 +47,7 @@ export async function POST(req: NextRequest) {
   if ("error" in agent) return agent.error;
   const { def } = agent;
   if (!type) return fail(400, "INVALID_TYPE", "글 유형을 선택해 주세요.");
-  if (!topic) return fail(400, "TOPIC_REQUIRED", "주제 및 내용을 입력해 주세요.");
+  if (!topic && !auto) return fail(400, "TOPIC_REQUIRED", "주제 및 내용을 입력해 주세요.");
 
   const values: Record<string, string> = {};
   for (const f of type.fields) {
@@ -73,8 +78,30 @@ export async function POST(req: NextRequest) {
 
   // 퓨샷: 대표 글 1편 + 같은 유형 최근 글 1편 (1시간 캐시)
   const examples = await getStyleExamples(type.id);
+
+  // 자동 글 근거: 확인된 교습소 정보 + 다가오는 시기 + 최근 글 제목(주제 중복 방지)
+  let autoCtx: AutoContext | undefined;
+  if (auto) {
+    const posts = await getLatestPosts(15);
+    autoCtx = {
+      facts: academyFacts(),
+      seasons: upcomingSeasons(todayKst()).map((s) => s.label),
+      recentTitles: posts.map((p) => p.title),
+    };
+  }
   const prompt = (canSee: boolean) =>
-    buildPrompt({ type, topic, values, memo, keywords, imageCount: images.length, imagesAttached: canSee, examples, aiImages });
+    buildPrompt({
+      type,
+      topic,
+      values,
+      memo,
+      keywords,
+      imageCount: images.length,
+      imagesAttached: canSee,
+      examples,
+      aiImages,
+      auto: autoCtx,
+    });
 
   const overQuota = checkQuota(req, agent);
   if (overQuota) return overQuota;
@@ -97,6 +124,7 @@ export async function POST(req: NextRequest) {
         agent: def.id,
         imagesSeen: run.imagesSent,
         examplesUsed: examples.length,
+        auto,
       },
     });
   } catch (e) {
