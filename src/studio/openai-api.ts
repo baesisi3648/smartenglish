@@ -71,6 +71,8 @@ export async function runOpenAI(
       text: { format: { type: "json_object" } },
       // 추론 토큰 포함 상한 — 본문 + JSON 여유, 비용 상한 역할
       max_output_tokens: 12_000,
+      // 블로그 글은 깊은 추론이 필요 없음 → 비용·시간 절약 (GPT-6 계열 기본값은 medium)
+      reasoning: { effort: "low" },
       store: false,
     },
     signal,
@@ -108,6 +110,11 @@ const IMAGE_STYLE = [
   "Not photorealistic. If children or teachers appear, draw them as simple cartoon characters, never realistic people.",
   "Scene to illustrate:",
 ].join(" ");
+
+/** 서버 환경변수에 등록된 OpenAI 키 (화면에 키를 넣지 않아도 GPT 사용) */
+export function openaiServerKey() {
+  return process.env.OPENAI_API_KEY?.trim() || "";
+}
 
 const IMAGE_MODELS = [process.env.OPENAI_IMAGE_MODEL || "gpt-image-2.5-flare", "gpt-image-2"];
 

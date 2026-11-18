@@ -8,7 +8,7 @@ import { runDeepseek } from "./deepseek-api";
 import { AgentError, redactSecrets } from "./errors";
 import { runGemini } from "./gemini-api";
 import { DEFAULT_OPENAI_MODEL, OPENAI_KEY_PATTERN, isOpenAIModel } from "./openai-models";
-import { runOpenAI } from "./openai-api";
+import { openaiServerKey, runOpenAI } from "./openai-api";
 import { availableAgents, isTrustedStudioRequest, studioEnabled, takeApiQuota } from "./guard";
 
 /** 스튜디오 API 라우트(초안·글 추천) 공통: 요청 검사, AI 실행, 오류 응답 */
@@ -28,8 +28,11 @@ export function checkStudioRequest(req: NextRequest) {
   return null;
 }
 
-/** 원장님 본인 키(BYOK) — 헤더로만 받는다 (URL·본문·로그에 남지 않게) */
-export type Byok = { apiKey: string; model: string };
+/**
+ * GPT 키: 화면에 넣은 키(헤더, browser)가 우선, 없으면 서버 환경변수 OPENAI_API_KEY(server).
+ * 화면 키는 헤더로만 받는다 (URL·본문·로그에 남지 않게).
+ */
+export type Byok = { apiKey: string; model: string; source: "browser" | "server" };
 export type ResolvedAgent = { def: AgentDef; byok?: Byok };
 
 /** 고른 AI 확인. PC 프로그램을 실행하는 AI(ACP)는 localhost 출처만 허용 */
@@ -43,22 +46,24 @@ export function resolveAgent(req: NextRequest, agentId: string): ResolvedAgent |
   }
   if (def.kind === "byok") {
     const byok = readByok(req);
-    if (!byok) return { error: fail(400, "API_KEY_REQUIRED", "OpenAI API 키(sk-로 시작)를 입력해 주세요.") };
+    if (!byok) return { error: fail(400, "API_KEY_REQUIRED", "OpenAI API 키(sk-로 시작)를 1번 칸에 입력해 주세요.") };
     return { def, byok };
   }
   return { def };
 }
 
 export function readByok(req: NextRequest): Byok | null {
-  const apiKey = req.headers.get("x-openai-key")?.trim() ?? "";
-  if (!OPENAI_KEY_PATTERN.test(apiKey)) return null;
   const m = req.headers.get("x-openai-model") ?? "";
-  return { apiKey, model: isOpenAIModel(m) ? m : DEFAULT_OPENAI_MODEL };
+  const model = isOpenAIModel(m) ? m : DEFAULT_OPENAI_MODEL;
+  const fromBrowser = req.headers.get("x-openai-key")?.trim() ?? "";
+  if (fromBrowser) return OPENAI_KEY_PATTERN.test(fromBrowser) ? { apiKey: fromBrowser, model, source: "browser" } : null;
+  const fromServer = openaiServerKey();
+  return fromServer ? { apiKey: fromServer, model, source: "server" } : null;
 }
 
-/** 서버 API 키로 부르는 AI는 시간당 사용량 제한 (키 비용 보호). 본인 키(BYOK)는 제외. 통과하면 null */
-export function checkQuota(req: NextRequest, def: AgentDef) {
-  if (def.kind !== "api") return null;
+/** 서버 키로 부르는 AI(Gemini·DeepSeek, 서버 env의 GPT 키)는 시간당 사용량 제한 (키 비용 보호). 화면에 넣은 본인 키는 제외. 통과하면 null */
+export function checkQuota(req: NextRequest, { def, byok }: ResolvedAgent) {
+  if (def.kind === "acp" || (def.kind === "byok" && byok?.source === "browser")) return null;
   const client = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || req.headers.get("x-real-ip") || "local";
   if (takeApiQuota(client)) return null;
   return fail(429, "RATE_LIMITED", "1시간 동안 쓸 수 있는 AI 요청 수(20건)를 넘었습니다. 잠시 뒤 다시 시도해 주세요.");

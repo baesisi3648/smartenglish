@@ -91,11 +91,14 @@ export default function StudioClient({
   agents,
   postTypes,
   keywordGroups,
+  openaiServerKey,
   logout,
 }: {
   agents: AgentInfo[];
   postTypes: PostType[];
   keywordGroups: { label: string; items: string[] }[];
+  /** 서버 환경변수(OPENAI_API_KEY)에 키가 있음 → 화면에 키를 안 넣어도 GPT 사용 가능 (키 값은 화면에 오지 않음) */
+  openaiServerKey: boolean;
   logout: () => Promise<void>;
 }) {
   const saved = useSyncExternalStore(noopSubscribe, () => readLocal(AGENT_KEY), () => null);
@@ -113,7 +116,11 @@ export default function StudioClient({
   const model = modelPicked ?? (OPENAI_MODELS.some((m) => m.id === savedModel) ? savedModel! : DEFAULT_OPENAI_MODEL);
   const isByok = agent === "openai";
   const keyOk = OPENAI_KEY_PATTERN.test(apiKey);
-  const byokHeaders: Record<string, string> = isByok ? { "X-OpenAI-Key": apiKey, "X-OpenAI-Model": model } : {};
+  // 화면 키가 있으면 그 키, 없으면 서버 키 (헤더에 키를 빼면 서버가 env 키를 씀)
+  const canUseGpt = keyOk || (!apiKey && openaiServerKey);
+  const byokHeaders: Record<string, string> = isByok
+    ? { "X-OpenAI-Model": model, ...(apiKey ? { "X-OpenAI-Key": apiKey } : {}) }
+    : {};
   const [aiImages, setAiImages] = useState(false);
   const [figures, setFigures] = useState<FigureState[]>([]);
   const [editText, setEditText] = useState(false);
@@ -198,7 +205,7 @@ export default function StudioClient({
 
   async function generate(e: React.FormEvent) {
     e.preventDefault();
-    if (isByok && !keyOk) {
+    if (isByok && !canUseGpt) {
       setError({ msg: "OpenAI API 키(sk-로 시작)를 1번 칸에 입력해 주세요." });
       return;
     }
@@ -329,7 +336,7 @@ export default function StudioClient({
                         spellCheck={false}
                         value={keyInput ?? savedKey ?? ""}
                         onChange={(e) => updateKey(e.target.value)}
-                        placeholder="sk-..."
+                        placeholder={openaiServerKey ? "서버 키 사용 중 (비워 두세요)" : "sk-..."}
                         className="min-w-0 flex-1 rounded-lg border border-line bg-white px-3 py-2 font-mono text-sm font-normal"
                       />
                       {apiKey && (
@@ -348,7 +355,9 @@ export default function StudioClient({
                       ? keyOk
                         ? "✓ 이 브라우저에 저장됨 (공용 PC라면 다 쓴 뒤 '지우기'를 눌러 주세요)"
                         : "키 형식이 맞지 않습니다. sk-로 시작하는 키 전체를 붙여넣어 주세요."
-                      : "키가 없으면 platform.openai.com → API keys 에서 새로 만들 수 있어요."}
+                      : openaiServerKey
+                        ? "✓ 서버에 등록된 키를 사용합니다. 비워 두면 되고, 여기에 키를 넣으면 그 키가 우선합니다."
+                        : "키가 없으면 platform.openai.com → API keys 에서 새로 만들 수 있어요."}
                   </p>
                   <label className="block text-sm font-bold">
                     글쓰기 모델
@@ -374,7 +383,7 @@ export default function StudioClient({
               postTypes={postTypes}
               onUse={applyIdea}
               headers={byokHeaders}
-              blocked={isByok && !keyOk ? "OpenAI API 키를 1번 칸에 먼저 입력해 주세요." : ""}
+              blocked={isByok && !canUseGpt ? "OpenAI API 키를 1번 칸에 먼저 입력해 주세요." : ""}
             />
 
             <Card title="2. 글 유형">

@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getLatestPosts } from "@/lib/blog";
+import { PLANNER_OPENAI_MODEL } from "@/studio/openai-models";
 import { analyzePosts, buildPlanPrompt, parsePlan, todayKst, upcomingSeasons } from "@/studio/planner";
 import { checkQuota, checkStudioRequest, errorResponse, fail, resolveAgent, runModel } from "@/studio/request";
 
@@ -34,13 +35,15 @@ export async function POST(req: NextRequest) {
     types: analysis.types,
   };
 
-  const overQuota = checkQuota(req, def);
+  const overQuota = checkQuota(req, agent);
   if (overQuota) return overQuota;
 
   try {
     // 2) 판단: AI가 이번 주 글 3개 제안
     const prompt = buildPlanPrompt({ today, seasons, analysis, postsAnalyzed: posts.length, memo });
-    const run = await runModel(agent, () => prompt, [], req.signal);
+    // GPT: 플래너는 여러 자료를 엮어 판단해야 해서 Terra 고정 (초안은 화면에서 고른 모델)
+    const planner = agent.byok ? { ...agent, byok: { ...agent.byok, model: PLANNER_OPENAI_MODEL } } : agent;
+    const run = await runModel(planner, () => prompt, [], req.signal);
     const plan = parsePlan(run.text);
     if (!plan) {
       return NextResponse.json(

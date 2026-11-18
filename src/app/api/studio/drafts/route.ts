@@ -76,7 +76,7 @@ export async function POST(req: NextRequest) {
   const prompt = (canSee: boolean) =>
     buildPrompt({ type, topic, values, memo, keywords, imageCount: images.length, imagesAttached: canSee, examples, aiImages });
 
-  const overQuota = checkQuota(req, def);
+  const overQuota = checkQuota(req, agent);
   if (overQuota) return overQuota;
 
   try {
