@@ -370,6 +370,9 @@ export default function StudioClient({
             <p className="text-xs text-ink-soft">사진 + 주제 → 백운밸리점 블로그 스타일 초안</p>
           </div>
           <div className="flex items-center gap-4 text-sm font-bold text-hb-navy">
+            <Link href="/studio/report" className="rounded-full bg-bg-soft px-3 py-1.5 ring-1 ring-line">
+              📊 분석 리포트
+            </Link>
             <Link href="/" className="underline">
               홈페이지
             </Link>
@@ -1081,7 +1084,7 @@ function Planner({
     <Card title="✨ 이번 주 뭐 쓸까? (선택)">
       <p className="text-xs leading-5 text-ink-soft">
         다가오는 시기(시험·방학·행사)와 블로그 최근 글을 AI가 살펴보고, 이번 주에 올리면 좋을 글 3개를
-        추천합니다. 마음에 드는 걸 고르면 아래 칸이 채워집니다.
+        추천합니다. ⚡ 바로 쓰기는 입력 없이 바로, 정보 채워서 쓰기는 아래 칸이 채워집니다.
       </p>
       <Input
         label="이번 주 상황 (선택)"

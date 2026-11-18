@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
 import { cookies } from "next/headers";
+import { connection } from "next/server";
 import Link from "next/link";
 import { availableAgents } from "@/studio/guard";
 import { passwordConfigured, verifySessionToken, SESSION_COOKIE } from "@/studio/auth";
@@ -21,6 +22,7 @@ function Center({ children }: { children: React.ReactNode }) {
 }
 
 async function Gate() {
+  await connection(); // 로그인 확인(Date.now)은 요청마다 — 미리 렌더링하지 않음
   if (!passwordConfigured()) {
     return (
       <Center>
