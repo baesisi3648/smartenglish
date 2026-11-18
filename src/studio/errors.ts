@@ -22,7 +22,7 @@ export class AgentError extends Error {
 }
 
 /** 서버 비밀값(비밀번호·서명키·API 키)이 문자열에 섞여 있으면 가린다 — 모델 출력·로그 공통 */
-const SECRET_ENV = ["STUDIO_PASSWORD", "STUDIO_SECRET", "GEMINI_API_KEY", "DEEPSEEK_API_KEY", "OPENAI_API_KEY", "VERCEL_OIDC_TOKEN"];
+const SECRET_ENV = ["STUDIO_PASSWORD", "STUDIO_SECRET", "GEMINI_API_KEY", "DEEPSEEK_API_KEY", "VERCEL_OIDC_TOKEN"];
 // 마지막 패턴: OpenAI 오류 문구가 키 앞뒤 몇 글자를 보여 주는 형태 (sk-proj-***…abcd) — 일부라도 로그에 남기지 않음
 const KEY_PATTERNS = [/AIza[0-9A-Za-z_-]{30,}/g, /\bsk-[A-Za-z0-9_-]{16,}/g, /\bsk-[A-Za-z0-9_-]*\*+[A-Za-z0-9_-]*/g];
 

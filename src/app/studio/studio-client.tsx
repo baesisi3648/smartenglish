@@ -83,7 +83,13 @@ type Result = {
   imagesSeen: boolean;
   examplesUsed: number;
   photos: string[];
+  keywords: string[];
+  /** 초안을 만들 때 적은 주제·내용 (수정 요청 때 사실 근거로 함께 보냄) */
+  topic: string;
 };
+
+/** 수정 요청 빠른 버튼 */
+const REVISE_PRESETS = ["전체를 조금 더 짧게", "더 따뜻하고 부드러운 말투로", "소제목을 더 짧고 눈에 띄게", "마무리 문단을 더 자연스럽게"];
 
 const AGENT_KEY = "hb-studio-agent";
 
@@ -91,14 +97,11 @@ export default function StudioClient({
   agents,
   postTypes,
   keywordGroups,
-  openaiServerKey,
   logout,
 }: {
   agents: AgentInfo[];
   postTypes: PostType[];
   keywordGroups: { label: string; items: string[] }[];
-  /** 서버 환경변수(OPENAI_API_KEY)에 키가 있음 → 화면에 키를 안 넣어도 GPT 사용 가능 (키 값은 화면에 오지 않음) */
-  openaiServerKey: boolean;
   logout: () => Promise<void>;
 }) {
   const saved = useSyncExternalStore(noopSubscribe, () => readLocal(AGENT_KEY), () => null);
@@ -116,15 +119,16 @@ export default function StudioClient({
   const model = modelPicked ?? (OPENAI_MODELS.some((m) => m.id === savedModel) ? savedModel! : DEFAULT_OPENAI_MODEL);
   const isByok = agent === "openai";
   const keyOk = OPENAI_KEY_PATTERN.test(apiKey);
-  // 화면 키가 있으면 그 키, 없으면 서버 키 (헤더에 키를 빼면 서버가 env 키를 씀)
-  const canUseGpt = keyOk || (!apiKey && openaiServerKey);
-  const byokHeaders: Record<string, string> = isByok
-    ? { "X-OpenAI-Model": model, ...(apiKey ? { "X-OpenAI-Key": apiKey } : {}) }
-    : {};
+  const byokHeaders: Record<string, string> = isByok ? { "X-OpenAI-Key": apiKey, "X-OpenAI-Model": model } : {};
   const [aiImages, setAiImages] = useState(false);
   const [figures, setFigures] = useState<FigureState[]>([]);
   const [editText, setEditText] = useState(false);
   const [center, setCenter] = useState(false);
+  // 자연어 수정: 요청 → AI가 해당 부분만 고침. history 로 한 단계씩 되돌리기
+  const [revText, setRevText] = useState("");
+  const [revising, setRevising] = useState(false);
+  const [revMsg, setRevMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [history, setHistory] = useState<{ title: string; body: string }[]>([]);
   const [typeId, setTypeId] = useState(postTypes[0].id);
   // null = 아직 고르지 않음 → 글 유형의 기본 키워드 사용
   const [kwPicked, setKwPicked] = useState<string[] | null>(null);
@@ -205,7 +209,7 @@ export default function StudioClient({
 
   async function generate(e: React.FormEvent) {
     e.preventDefault();
-    if (isByok && !canUseGpt) {
+    if (isByok && !keyOk) {
       setError({ msg: "OpenAI API 키(sk-로 시작)를 1번 칸에 입력해 주세요." });
       return;
     }
@@ -234,7 +238,9 @@ export default function StudioClient({
         setError({ msg: json.error, raw: json.raw });
       } else {
         // 제출 당시 사진 순서를 결과와 함께 고정 ([사진N] 마커와 일치)
-        setResult({ ...json.data, photos: files.map((f) => URL.createObjectURL(f)) });
+        setResult({ ...json.data, topic, photos: files.map((f) => URL.createObjectURL(f)) });
+        setHistory([]);
+        setRevMsg(null);
         setBody(json.data.body);
         const descs = isByok && aiImages ? figuresOf(json.data.body).slice(0, MAX_AI_IMAGES) : [];
         setFigures(descs.map(() => ({ status: "loading" })));
@@ -245,6 +251,67 @@ export default function StudioClient({
     } finally {
       setLoading(false);
     }
+  }
+
+  /** 그림 상태를 [그림: 설명] 기준으로 새 본문에 맞춤 (설명이 같은 그림은 유지, 새 자리는 "다시 그리기") */
+  function remapFigures(oldBody: string, newBody: string) {
+    const oldDescs = figuresOf(oldBody);
+    const newDescs = figuresOf(newBody).slice(0, MAX_AI_IMAGES);
+    setFigures((prev) =>
+      newDescs.map((d) => {
+        const k = oldDescs.indexOf(d);
+        return k >= 0 && prev[k] ? prev[k] : { status: "error", error: "새 그림 자리예요" };
+      }),
+    );
+  }
+
+  async function revise(instruction: string) {
+    if (!result || !instruction.trim()) return;
+    if (isByok && !keyOk) {
+      setRevMsg({ ok: false, text: "OpenAI API 키를 1번 칸에 입력해 주세요." });
+      return;
+    }
+    setRevising(true);
+    setRevMsg(null);
+    try {
+      const res = await fetch("/api/studio/revise", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Studio-Request": "1", ...byokHeaders },
+        body: JSON.stringify({
+          agent,
+          title: result.title,
+          body,
+          instruction,
+          topic: result.topic,
+          keyword: result.keywords[0] ?? "",
+        }),
+      });
+      const json = await res.json();
+      if (!json.success) {
+        setRevMsg({ ok: false, text: json.error });
+        return;
+      }
+      setHistory((h) => [...h, { title: result.title, body }]);
+      if (figures.length > 0) remapFigures(body, json.data.body);
+      setResult({ ...result, title: json.data.title });
+      setBody(json.data.body);
+      setRevText("");
+      setRevMsg({ ok: true, text: json.data.notes || "고쳤습니다." });
+    } catch (err) {
+      setRevMsg({ ok: false, text: err instanceof Error ? err.message : "요청 실패" });
+    } finally {
+      setRevising(false);
+    }
+  }
+
+  function undo() {
+    const last = history.at(-1);
+    if (!last || !result) return;
+    if (figures.length > 0) remapFigures(body, last.body);
+    setHistory((h) => h.slice(0, -1));
+    setResult({ ...result, title: last.title });
+    setBody(last.body);
+    setRevMsg({ ok: true, text: "이전 글로 되돌렸습니다." });
   }
 
   function flash(label: string) {
@@ -336,7 +403,7 @@ export default function StudioClient({
                         spellCheck={false}
                         value={keyInput ?? savedKey ?? ""}
                         onChange={(e) => updateKey(e.target.value)}
-                        placeholder={openaiServerKey ? "서버 키 사용 중 (비워 두세요)" : "sk-..."}
+                        placeholder="sk-..."
                         className="min-w-0 flex-1 rounded-lg border border-line bg-white px-3 py-2 font-mono text-sm font-normal"
                       />
                       {apiKey && (
@@ -355,9 +422,7 @@ export default function StudioClient({
                       ? keyOk
                         ? "✓ 이 브라우저에 저장됨 (공용 PC라면 다 쓴 뒤 '지우기'를 눌러 주세요)"
                         : "키 형식이 맞지 않습니다. sk-로 시작하는 키 전체를 붙여넣어 주세요."
-                      : openaiServerKey
-                        ? "✓ 서버에 등록된 키를 사용합니다. 비워 두면 되고, 여기에 키를 넣으면 그 키가 우선합니다."
-                        : "키가 없으면 platform.openai.com → API keys 에서 새로 만들 수 있어요."}
+                      : "키가 없으면 platform.openai.com → API keys 에서 새로 만들 수 있어요."}
                   </p>
                   <label className="block text-sm font-bold">
                     글쓰기 모델
@@ -383,7 +448,7 @@ export default function StudioClient({
               postTypes={postTypes}
               onUse={applyIdea}
               headers={byokHeaders}
-              blocked={isByok && !canUseGpt ? "OpenAI API 키를 1번 칸에 먼저 입력해 주세요." : ""}
+              blocked={isByok && !keyOk ? "OpenAI API 키를 1번 칸에 먼저 입력해 주세요." : ""}
             />
 
             <Card title="2. 글 유형">
@@ -603,6 +668,64 @@ export default function StudioClient({
                     : result.examplesUsed === 1
                       ? "✍️ 원장님 대표 글의 문체를 참고했습니다. (최근 글은 불러오지 못함)"
                       : "✍️ 기본 문체 예시로 썼습니다."}
+                </p>
+              </div>
+              <div className="rounded-xl bg-white p-4 ring-1 ring-line">
+                <p className="mb-2 text-sm font-bold text-ink-soft">✏️ 고쳐 달라고 하기</p>
+                <textarea
+                  value={revText}
+                  onChange={(e) => setRevText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !revising) revise(revText);
+                  }}
+                  rows={3}
+                  disabled={revising}
+                  placeholder={"예) 두 번째 소제목 내용을 더 짧게 줄여 주세요\n예) 마지막에 '12월 첫째 주 개강' 문장을 넣어 주세요"}
+                  className="w-full rounded-lg border border-line p-3 text-sm leading-6"
+                />
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {REVISE_PRESETS.map((p) => (
+                    <button
+                      key={p}
+                      type="button"
+                      disabled={revising}
+                      onClick={() => setRevText(p)}
+                      className="rounded-full border border-line px-3 py-1 text-xs font-bold text-ink-soft hover:border-hb-blue disabled:opacity-50"
+                    >
+                      {p}
+                    </button>
+                  ))}
+                </div>
+                <div className="mt-3 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => revise(revText)}
+                    disabled={revising || !revText.trim()}
+                    className="flex-1 rounded-full bg-hb-blue py-2.5 text-sm font-extrabold text-white disabled:opacity-50"
+                  >
+                    {revising ? `${selectedAgent.label}가 고치는 중… (30초~1분)` : "수정하기"}
+                  </button>
+                  {history.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={undo}
+                      disabled={revising}
+                      className="rounded-full border-2 border-line px-4 text-sm font-bold text-ink-soft disabled:opacity-50"
+                    >
+                      ↩ 되돌리기
+                    </button>
+                  )}
+                </div>
+                {revMsg && (
+                  <p
+                    className={`mt-2 rounded-lg p-2.5 text-xs leading-5 ${revMsg.ok ? "bg-amber-50 text-amber-900" : "bg-red-50 text-red-800"}`}
+                  >
+                    {revMsg.ok ? "✓ " : ""}
+                    {revMsg.text}
+                  </p>
+                )}
+                <p className="mt-2 text-xs text-ink-soft">
+                  요청한 부분만 고치고 나머지는 그대로 둡니다. 새 날짜·인원·비용은 요청에 적은 것만 들어갑니다.
                 </p>
               </div>
               {figures.length > 0 && (

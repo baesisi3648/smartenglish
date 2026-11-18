@@ -1,7 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { generateImage } from "@/studio/openai-api";
-import { OPENAI_AGENT } from "@/studio/agents";
-import { checkQuota, checkStudioRequest, errorResponse, fail, readByok } from "@/studio/request";
+import { checkStudioRequest, errorResponse, fail, readByok } from "@/studio/request";
 
 export const maxDuration = 300;
 
@@ -17,9 +16,6 @@ export async function POST(req: NextRequest) {
 
   const byok = readByok(req);
   if (!byok) return fail(400, "API_KEY_REQUIRED", "AI 그림은 GPT(내 API 키)에서만 만들 수 있습니다. OpenAI API 키를 입력해 주세요.");
-
-  const overQuota = checkQuota(req, { def: OPENAI_AGENT, byok });
-  if (overQuota) return overQuota;
 
   const body = (await req.json().catch(() => null)) as { description?: unknown } | null;
   const description = String(body?.description ?? "")

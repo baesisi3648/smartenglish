@@ -68,7 +68,7 @@ export const OPENAI_AGENT: ByokAgentDef = {
   label: "GPT (내 API 키)",
   plan: "OpenAI API 키 · 쓴 만큼 과금 · AI 그림 가능",
   loginHelp:
-    "platform.openai.com → API keys 에서 만든 키(sk-로 시작)를 아래에 넣어 주세요. 키는 이 브라우저에만 저장되고, 서버는 요청을 전달할 때만 쓰고 저장하지 않습니다. (관리자가 서버 env에 OPENAI_API_KEY를 등록했다면 비워 둬도 됩니다)",
+    "platform.openai.com → API keys 에서 만든 키(sk-로 시작)를 아래에 넣어 주세요. 키는 이 브라우저에만 저장되고, 서버는 요청을 전달할 때만 쓰고 저장하지 않습니다.",
 };
 
 export const AGENTS: Record<AgentId, AgentDef> = {

@@ -43,14 +43,34 @@ export type FinalPost = {
   notes: string;
 };
 
-/** keywords[0] = 제목 괄호 키워드, 전체 키워드는 태그로도 추가 */
-export function assemble(draft: Draft, keywords: string[]): FinalPost {
-  const title = `${draft.title.replace(/\[[^\]]*\]\s*$/, "").trim()}[${keywords[0]}]`;
-  const clean = draft.body
+/** 제목 끝 괄호 키워드를 지정 키워드로 맞춤 (AI가 붙인 괄호는 떼어 냄) */
+export function withKeyword(title: string, keyword: string) {
+  const base = title.replace(/\[[^\]]*\]\s*$/, "").trim();
+  return keyword ? `${base}[${keyword}]` : base;
+}
+
+/** AI 본문 → 인사말 + 본문 + 끝인사·연락처 (인사·연락처는 AI가 아니라 SSOT에서) */
+export function wrapBody(core: string) {
+  const clean = core
     .replace(/^안녕하세요[^\n]*\n?/m, "")
     .replace(/스마트해법영어 백운밸리점입니다\.?\n?/, "")
     .trim();
-  const body = `${INTRO}\n\n${clean}\n\n\n${outro()}`;
+  return `${INTRO}\n\n${clean}\n\n\n${outro()}`;
+}
+
+/** 완성 글 → AI가 쓴 본문 부분만 (수정 요청 때 인사·연락처는 빼고 보낸다) */
+export function coreBody(full: string) {
+  let text = full.replace(/\r/g, "");
+  if (text.startsWith(INTRO)) text = text.slice(INTRO.length);
+  const end = text.indexOf(`" 감사합니다 "`);
+  if (end >= 0) text = text.slice(0, end);
+  return text.trim();
+}
+
+/** keywords[0] = 제목 괄호 키워드, 전체 키워드는 태그로도 추가 */
+export function assemble(draft: Draft, keywords: string[]): FinalPost {
+  const title = withKeyword(draft.title, keywords[0]);
+  const body = wrapBody(draft.body);
   const norm = (t: string) => t.replace(/^#/, "").replace(/\s+/g, "");
   const kwTags = keywords.map(norm);
   const extra = draft.tags.map(norm).filter(Boolean);

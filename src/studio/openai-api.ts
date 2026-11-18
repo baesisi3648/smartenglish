@@ -111,11 +111,6 @@ const IMAGE_STYLE = [
   "Scene to illustrate:",
 ].join(" ");
 
-/** 서버 환경변수에 등록된 OpenAI 키 (화면에 키를 넣지 않아도 GPT 사용) */
-export function openaiServerKey() {
-  return process.env.OPENAI_API_KEY?.trim() || "";
-}
-
 const IMAGE_MODELS = [process.env.OPENAI_IMAGE_MODEL || "gpt-image-2.5-flare", "gpt-image-2"];
 
 export async function generateImage(

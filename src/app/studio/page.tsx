@@ -3,7 +3,6 @@ import { Suspense } from "react";
 import { cookies } from "next/headers";
 import Link from "next/link";
 import { availableAgents } from "@/studio/guard";
-import { openaiServerKey } from "@/studio/openai-api";
 import { passwordConfigured, verifySessionToken, SESSION_COOKIE } from "@/studio/auth";
 import { POST_TYPES, KEYWORD_GROUPS } from "@/studio/post-types";
 import StudioClient from "./studio-client";
@@ -82,7 +81,6 @@ async function Gate() {
       agents={agents.map(({ id, label, plan, loginHelp }) => ({ id, label, plan, loginHelp }))}
       postTypes={POST_TYPES}
       keywordGroups={KEYWORD_GROUPS}
-      openaiServerKey={Boolean(openaiServerKey())}
       logout={logout}
     />
   );
