@@ -123,7 +123,7 @@ export default function StudioClient({
   const [aiImages, setAiImages] = useState(false);
   const [figures, setFigures] = useState<FigureState[]>([]);
   const [editText, setEditText] = useState(false);
-  const [center, setCenter] = useState(false);
+  const [center, setCenter] = useState(true); // 기본: 가운데 정렬
   // 자연어 수정: 요청 → AI가 해당 부분만 고침. history 로 한 단계씩 되돌리기
   const [revText, setRevText] = useState("");
   const [revising, setRevising] = useState(false);
