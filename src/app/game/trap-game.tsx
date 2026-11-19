@@ -1,11 +1,15 @@
 "use client";
 
-import { useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import Image from "next/image";
 import {
   CELLS,
+  SIZE,
   START,
   START_HEARTS,
+  cellOf,
+  colOf,
+  rowOf,
   answer,
   canMove,
   isOasis,
@@ -33,12 +37,22 @@ function readBest() {
   }
   return bestCache;
 }
+const LEVELS: Level[] = ["phonics", "elementary", "middle"];
+/** 저장값이 깨져 있어도(예: "null", 배열, 문자열 점수) 게임이 멈추지 않게 레벨별 0 이상의 정수만 받는다 */
 function parseBest(raw: string | null): Partial<Record<Level, number>> {
+  let data: unknown;
   try {
-    return raw ? JSON.parse(raw) : {};
+    data = raw ? JSON.parse(raw) : null;
   } catch {
     return {};
   }
+  if (!data || typeof data !== "object" || Array.isArray(data)) return {};
+  const out: Partial<Record<Level, number>> = {};
+  for (const l of LEVELS) {
+    const v = (data as Record<string, unknown>)[l];
+    if (typeof v === "number" && Number.isSafeInteger(v) && v >= 0) out[l] = v;
+  }
+  return out;
 }
 function saveBest(level: Level, score: number) {
   const cur = parseBest(readBest());
@@ -56,7 +70,33 @@ const subscribe = (l: () => void) => {
 type Review = { q: Question; choice: number; right: boolean };
 type Feedback = Review & { lostAfter: boolean };
 
-const NUM_COLOR = ["", "#0689d7", "#1f8a3e", "#e0663d", "#b42318", "#7a1f5c", "#7a1f5c", "#7a1f5c", "#7a1f5c"];
+/** 방문 칸 숫자색 — 두 모래색 배경 모두에서 대비 4.5:1 이상 */
+const NUM_COLOR = ["", "#0a4f8f", "#14632c", "#a3361a", "#7f1d1d", "#5b1647", "#5b1647", "#5b1647", "#5b1647"];
+/** 센서 원 배경색 (흰 글자) */
+const DOT_COLOR = ["#3f8a2a", "#0a4f8f", "#14632c", "#a3361a", "#7f1d1d", "#5b1647", "#5b1647", "#5b1647", "#5b1647"];
+
+/** 8방향 이동 (방향 버튼·방향키) */
+const DIRS: { dr: number; dc: number; arrow: string; name: string }[] = [
+  { dr: -1, dc: -1, arrow: "↖", name: "왼쪽 위로" },
+  { dr: -1, dc: 0, arrow: "↑", name: "위로" },
+  { dr: -1, dc: 1, arrow: "↗", name: "오른쪽 위로" },
+  { dr: 0, dc: -1, arrow: "←", name: "왼쪽으로" },
+  { dr: 0, dc: 1, arrow: "→", name: "오른쪽으로" },
+  { dr: 1, dc: -1, arrow: "↙", name: "왼쪽 아래로" },
+  { dr: 1, dc: 0, arrow: "↓", name: "아래로" },
+  { dr: 1, dc: 1, arrow: "↘", name: "오른쪽 아래로" },
+];
+const KEY_DIR: Record<string, [number, number]> = {
+  ArrowUp: [-1, 0],
+  ArrowDown: [1, 0],
+  ArrowLeft: [0, -1],
+  ArrowRight: [0, 1],
+};
+const target = (pos: Cell, dr: number, dc: number): Cell | null => {
+  const r = rowOf(pos) + dr;
+  const c = colOf(pos) + dc;
+  return r >= 0 && r < SIZE && c >= 0 && c < SIZE ? cellOf(r, c) : null;
+};
 
 export default function TrapGame({ bookingUrl }: { bookingUrl: string }) {
   const [game, setGame] = useState<Game | null>(null);
@@ -64,6 +104,8 @@ export default function TrapGame({ bookingUrl }: { bookingUrl: string }) {
   const [reviews, setReviews] = useState<Review[]>([]);
   const [bump, setBump] = useState(0); // 오답 시 화면 흔들기
   const best = parseBest(useSyncExternalStore(subscribe, readBest, () => null));
+  // 보기를 빠르게 두 번 눌러도 답이 한 번만 처리되게 (렌더 전 연속 클릭 방지)
+  const answering = useRef(false);
 
   function start(level: Level) {
     setGame(newGame(level));
@@ -72,14 +114,36 @@ export default function TrapGame({ bookingUrl }: { bookingUrl: string }) {
   }
 
   function step(cell: Cell) {
-    if (!game || !canMove(game, cell)) return;
+    if (!game || feedback || !canMove(game, cell)) return;
     const next = move(game, cell, BANKS[game.level]);
+    if (next.status === "quiz") answering.current = false;
     setGame(next);
     if (next.status === "won") saveBest(next.level, next.score);
   }
 
+  // 방향키 이동 (문제·결과 창이 없을 때만). 대각선은 방향 버튼으로
+  const live = useRef({ game, feedback, step });
+  useEffect(() => {
+    live.current = { game, feedback, step };
+  });
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const d = KEY_DIR[e.key];
+      const { game: g, feedback: f, step: go } = live.current;
+      if (!d || !g || f || g.status !== "play") return;
+      if ((e.target as HTMLElement)?.closest("dialog, input, textarea, select")) return;
+      const t = target(g.pos, d[0], d[1]);
+      if (t === null) return;
+      e.preventDefault();
+      go(t);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   function choose(choice: number) {
-    if (!game?.quiz || feedback) return;
+    if (!game?.quiz || feedback || answering.current) return;
+    answering.current = true;
     const bank = BANKS[game.level];
     const q = bank.find((x) => x.id === game.quiz!.questionId)!;
     const next = answer(game, choice, bank);
@@ -121,8 +185,8 @@ export default function TrapGame({ bookingUrl }: { bookingUrl: string }) {
           <div
             className="grid aspect-square gap-[3px] overflow-hidden rounded-[20px] bg-[#7b4a22] p-[3px]"
             style={{ gridTemplateColumns: "repeat(8, minmax(0, 1fr))", gridTemplateRows: "repeat(8, minmax(0, 1fr))" }}
-            role="grid"
-            aria-label="사파리 보드"
+            role="group"
+            aria-label="사파리 보드 8×8 — 아래 방향 버튼이나 방향키로도 움직일 수 있어요"
           >
             {Array.from({ length: CELLS }, (_, cell) => (
               <Tile key={cell} cell={cell} game={game} onStep={step} />
@@ -130,16 +194,10 @@ export default function TrapGame({ bookingUrl }: { bookingUrl: string }) {
           </div>
         </div>
 
-        {/* 센서 · 안내 */}
+        {/* 센서 · 안내 + 방향 버튼 (작은 화면에서 칸을 잘못 누르지 않게 크게) */}
         <div className="mt-4 flex items-center gap-3 rounded-2xl bg-white/85 p-3 ring-1 ring-[#e9d8ac] backdrop-blur">
-          <span
-            className="grid size-12 shrink-0 place-items-center rounded-full font-round text-2xl text-white"
-            style={{ background: near ? NUM_COLOR[Math.min(near, 8)] : "#5aa83a" }}
-            aria-hidden
-          >
-            {near}
-          </span>
-          <p className="text-sm leading-5">
+          <DirPad game={game} disabled={!!feedback} onStep={step} near={near} />
+          <p className="min-w-0 flex-1 text-sm leading-5" aria-live="polite">
             {game.status === "play" ? (
               near === 0 ? (
                 <>
@@ -183,9 +241,9 @@ export default function TrapGame({ bookingUrl }: { bookingUrl: string }) {
         <details className="rounded-2xl bg-white/85 p-4 text-sm leading-6 ring-1 ring-[#e9d8ac] backdrop-blur">
           <summary className="cursor-pointer font-round text-[#7b4a22]">게임 방법</summary>
           <ul className="mt-2 list-disc space-y-1 pl-5 text-ink-soft">
-            <li>반짝이는 칸을 눌러 한 칸씩 움직여요 (대각선도 OK).</li>
+            <li>노란 테두리 칸이나 방향 버튼을 눌러 한 칸씩 움직여요 (대각선도 OK, 키보드는 방향키).</li>
             <li>밟은 칸의 숫자 = 그 주변 8칸에 숨은 덫의 수.</li>
-            <li>덫을 밟으면 영어 문제! 맞히면 +3점, 틀리면 ❤️ 하나.</li>
+            <li>덫을 밟으면 영어 문제! 답하면 덫은 사라지고, 맞히면 +3점, 틀리면 ❤️ 하나.</li>
             <li>오른쪽 위 오아시스 🌴에 도착하면 승리! 남은 하트도 점수가 돼요.</li>
           </ul>
         </details>
@@ -196,12 +254,13 @@ export default function TrapGame({ bookingUrl }: { bookingUrl: string }) {
 
       {/* ── 문제 ── */}
       {(game.status === "quiz" || feedback) && (
-        <Modal>
+        <Modal labelledBy="quiz-title">
           {feedback ? (
             <div className="anim-pop">
-              <p className={`font-display text-3xl ${feedback.right ? "text-[#1f8a3e]" : "text-[#e0663d]"}`}>
+              <p id="quiz-title" className={`font-display text-3xl ${feedback.right ? "text-[#14632c]" : "text-[#a3361a]"}`}>
                 {feedback.right ? "정답! 덫을 치웠어요 ✨" : "아쉬워요! ❤️ −1"}
               </p>
+              {!feedback.right && <p className="mt-1 text-sm text-ink-soft">덫은 사라졌어요. 정답을 기억해 두세요!</p>}
               <p className="mt-3 rounded-xl bg-[#fff7e0] p-3 text-sm leading-6">
                 <b>정답: {feedback.q.choices[feedback.q.answer - 1]}</b>
                 <br />
@@ -219,8 +278,10 @@ export default function TrapGame({ bookingUrl }: { bookingUrl: string }) {
           ) : (
             quizQ && (
               <div className="anim-pop">
-                <p className="font-round text-sm text-[#e0663d]">🪤 덫을 밟았어요! 맞히면 덫을 치울 수 있어요</p>
-                <p className="mt-2 font-display text-2xl leading-snug text-ink sm:text-[1.7rem]">{quizQ.question}</p>
+                <p className="font-round text-sm text-[#a3361a]">🪤 덫을 밟았어요! 답하면 덫이 사라져요 · 맞히면 +3점, 틀리면 ❤️ −1</p>
+                <p id="quiz-title" tabIndex={-1} autoFocus className="mt-2 font-display text-2xl leading-snug text-ink outline-none sm:text-[1.7rem]">
+                  {quizQ.question}
+                </p>
                 <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
                   {quizQ.choices.map((c, i) => (
                     <button
@@ -244,7 +305,7 @@ export default function TrapGame({ bookingUrl }: { bookingUrl: string }) {
 
       {/* ── 결과 ── */}
       {ended && (
-        <Modal>
+        <Modal labelledBy="result-title">
           <Result game={game} reviews={reviews} best={best[game.level]} bookingUrl={bookingUrl} onRetry={() => start(game.level)} onLevels={() => setGame(null)} />
         </Modal>
       )}
@@ -273,6 +334,9 @@ function Tile({ cell, game, onStep }: { cell: Cell; game: Game; onStep: (c: Cell
         ? "bg-[#8fcf6b] bg-[radial-gradient(circle_at_25%_70%,#79b957_0_1.5px,transparent_2px),radial-gradient(circle_at_70%_35%,#79b957_0_1.5px,transparent_2px)]"
         : "bg-[#84c561] bg-[radial-gradient(circle_at_60%_70%,#6eae4d_0_1.5px,transparent_2px),radial-gradient(circle_at_30%_30%,#6eae4d_0_1.5px,transparent_2px)]";
 
+  const r = rowOf(cell);
+  const c = colOf(cell);
+  const dir = DIRS.find((d) => rowOf(game.pos) + d.dr === r && colOf(game.pos) + d.dc === c);
   const label = here
     ? "지금 위치"
     : oasis
@@ -286,8 +350,7 @@ function Tile({ cell, game, onStep }: { cell: Cell; game: Game; onStep: (c: Cell
   return (
     <button
       type="button"
-      role="gridcell"
-      aria-label={`${label}${reachable ? " (이동 가능)" : ""}`}
+      aria-label={`${r + 1}행 ${c + 1}열, ${label}${reachable && dir ? ` — ${dir.name} 이동` : ""}`}
       disabled={!reachable}
       onClick={() => onStep(cell)}
       className={`relative grid place-items-center rounded-[6px] text-[clamp(14px,4.4vw,26px)] leading-none transition-transform ${bg} ${
@@ -339,7 +402,7 @@ function Intro({ onStart, best }: { onStart: (l: Level) => void; best: Partial<R
           {[
             ["👣", "한 칸씩 이동", "대각선도 갈 수 있어요"],
             ["🔢", "숫자 = 주변 덫", "숫자를 보고 길을 골라요"],
-            ["🪤", "덫엔 영어 퀴즈", "맞히면 덫이 사라져요"],
+            ["🪤", "덫엔 영어 퀴즈", "답하면 덫이 사라져요"],
           ].map(([e, t, d]) => (
             <li key={t} className="rounded-2xl bg-white/80 p-3 ring-1 ring-[#efdcaa]">
               <p className="text-xl">{e}</p>
@@ -398,7 +461,9 @@ function Result({
   return (
     <div className="anim-pop text-center">
       <p className="text-5xl">{won ? "🌴" : "🌵"}</p>
-      <p className="mt-2 font-display text-3xl text-[#7b4a22]">{won ? "오아시스 도착!" : "하트를 모두 썼어요"}</p>
+      <p id="result-title" tabIndex={-1} autoFocus className="mt-2 font-display text-3xl text-[#7b4a22] outline-none">
+        {won ? "오아시스 도착!" : "하트를 모두 썼어요"}
+      </p>
       {won && (
         <p className="mt-2 text-3xl tracking-widest" aria-label={`별 ${s}개`}>
           {[1, 2, 3].map((i) => (
@@ -463,10 +528,65 @@ function Stat({ label, value }: { label: string; value: number }) {
     </div>
   );
 }
-function Modal({ children }: { children: React.ReactNode }) {
+/**
+ * 문제·결과 창: 네이티브 <dialog>.showModal() — 뒤쪽 화면은 자동으로 조작·포커스 불가(inert),
+ * 창이 열리면 첫 버튼으로 포커스, 닫히면 원래 자리로 돌아간다. Esc로 닫히지 않게 막는다(답을 골라야 진행).
+ */
+function Modal({ children, labelledBy }: { children: React.ReactNode; labelledBy: string }) {
+  const ref = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const d = ref.current;
+    if (!d) return;
+    if (!d.open) d.showModal();
+    return () => {
+      if (d.open) d.close();
+    };
+  }, []);
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#2b1a0a]/45 p-3 backdrop-blur-[2px] sm:items-center" role="dialog" aria-modal="true">
-      <div className="max-h-[92dvh] w-full max-w-lg overflow-auto rounded-[28px] bg-white p-5 shadow-2xl sm:p-6">{children}</div>
+    <dialog
+      ref={ref}
+      aria-labelledby={labelledBy}
+      onCancel={(e) => e.preventDefault()}
+      className="m-0 mx-auto mb-3 mt-auto max-h-[92dvh] w-[calc(100%-1.5rem)] max-w-lg overflow-auto rounded-[28px] bg-white p-5 shadow-2xl backdrop:bg-[#2b1a0a]/45 backdrop:backdrop-blur-[2px] sm:my-auto sm:p-6"
+    >
+      {children}
+    </dialog>
+  );
+}
+
+/* ───────── 방향 버튼 (어린이 손가락에 맞춘 48px, 가운데는 센서 숫자) ───────── */
+function DirPad({ game, disabled, onStep, near }: { game: Game; disabled: boolean; onStep: (c: Cell) => void; near: number }) {
+  const cells = [...DIRS.slice(0, 4), null, ...DIRS.slice(4)];
+  return (
+    <div className="grid shrink-0 grid-cols-3 gap-1" role="group" aria-label="방향 버튼">
+      {cells.map((d, i) => {
+        if (!d) {
+          return (
+            <span
+              key="center"
+              className="grid size-12 place-items-center rounded-full font-round text-2xl text-white"
+              style={{ background: DOT_COLOR[Math.min(near, 8)] }}
+              aria-label={`주변 덫 ${near}개`}
+            >
+              {near}
+            </span>
+          );
+        }
+        const t = target(game.pos, d.dr, d.dc);
+        const ok = !disabled && t !== null && canMove(game, t);
+        return (
+          <button
+            key={i}
+            type="button"
+            disabled={!ok}
+            onClick={() => t !== null && onStep(t)}
+            aria-label={`${d.name} 이동`}
+            className="grid size-12 place-items-center rounded-xl bg-[#fff1c2] text-xl font-bold text-[#7b4a22] shadow-[0_3px_0_#e2c879] transition active:translate-y-[2px] active:shadow-none disabled:opacity-30 disabled:shadow-none"
+          >
+            {d.arrow}
+          </button>
+        );
+      })}
     </div>
   );
 }

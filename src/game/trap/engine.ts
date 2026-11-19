@@ -128,7 +128,8 @@ export function pickQuestion(bank: readonly Question[], asked: readonly string[]
   if (!bank.length) throw new Error("EMPTY_BANK");
   const fresh = bank.filter((q) => !asked.includes(q.id));
   if (fresh.length) return fresh[Math.floor(rng() * fresh.length)];
-  return [...bank].sort((a, b) => asked.indexOf(a.id) - asked.indexOf(b.id))[0];
+  // 마지막으로 낸 시점이 가장 오래된 문제 (a→b→a 다음은 b)
+  return [...bank].sort((a, b) => asked.lastIndexOf(a.id) - asked.lastIndexOf(b.id))[0];
 }
 
 /** 이웃 칸으로 1칸 이동. 덫이면 문제 단계, 오아시스면 승리, 처음 밟는 안전 칸이면 +1 */
@@ -145,10 +146,11 @@ export function move(game: Game, to: Cell, bank: readonly Question[], rng: Rng =
     const q = pickQuestion(bank, game.asked, rng);
     return { ...next, status: "quiz", quiz: { cell: to, questionId: q.id }, asked: [...game.asked, q.id] };
   }
+  const safe = firstVisit ? SAFE_POINTS : 0; // 오아시스도 덫 없는 첫 방문 칸이면 +1
   if (isOasis(to)) {
-    return { ...next, status: "won", score: game.score + OASIS_POINTS + game.hearts * HEART_POINTS };
+    return { ...next, status: "won", score: game.score + safe + OASIS_POINTS + game.hearts * HEART_POINTS };
   }
-  return firstVisit ? { ...next, score: game.score + SAFE_POINTS } : next;
+  return { ...next, score: game.score + safe };
 }
 
 /** 문제에 답함: 맞히면 +3, 틀리면 하트 −1. 어느 쪽이든 그 덫은 치운다 (같은 덫에 두 번 걸리지 않게) */
