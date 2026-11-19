@@ -50,7 +50,7 @@ const ELEMENTARY = make("e", [
   ["'library'는 어디일까요?", ["병원", "도서관", "우체국", "공원"], 2, "library는 책을 빌리는 도서관이에요."],
   ["A dog has ___ legs.", ["two", "three", "four", "six"], 3, "강아지 다리는 네 개, four!"],
   ["___ you like apples?", ["Do", "Does", "Are", "Is"], 1, "you에게 묻는 일반동사 질문은 Do로 시작해요."],
-  ["He ___ soccer every day.", ["play", "plays", "to play", "are play"], 2, "현재형 문장에서 He, She, It 다음 일반동사에는 -s를 붙여요. He plays."],
+  ["He ___ soccer every day.", ["play", "plays", "to play", "are play"], 2, "현재형 긍정문에서 He, She, It 다음 일반동사에는 -s(또는 -es)를 붙여요. He plays, She watches."],
   ["'tall'의 반대말은?", ["short", "long", "big", "small"], 1, "키가 tall(큰) ↔ short(작은)"],
   ["1년의 첫 번째 달은?", ["January", "June", "July", "March"], 1, "January는 1월이에요."],
   ["Can you swim? — Yes, I ___.", ["do", "can", "am", "is"], 2, "Can으로 물으면 can으로 대답해요."],

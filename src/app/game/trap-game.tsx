@@ -133,6 +133,7 @@ export default function TrapGame({ bookingUrl }: { bookingUrl: string }) {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       const d = KEY_DIR[e.key];
+      if (e.repeat) return; // 꾹 누르고 있어도 한 칸만 (덫으로 달려가지 않게)
       const { game: g, feedback: f, step: go } = live.current;
       if (!d || !g || f || g.status !== "play") return;
       // 게임 영역(보드·방향 버튼)이나 빈 곳에 포커스가 있을 때만 — 링크·'게임 방법' 등을 조작 중이면 방향키는 원래대로
@@ -432,6 +433,7 @@ function Intro({ onStart, best }: { onStart: (l: Level) => void; best: Partial<R
             key={l}
             type="button"
             onClick={() => onStart(l)}
+            data-level-card
             className="anim-pop group rounded-3xl bg-white p-5 text-left ring-2 ring-[#efdcaa] transition hover:-translate-y-1 hover:ring-hb-blue"
             style={{ animationDelay: `${i * 70}ms` }}
           >
@@ -555,7 +557,10 @@ function Modal({ children, labelledBy }: { children: React.ReactNode; labelledBy
     return () => {
       if (d.open) d.close();
       // 닫힌 뒤 보드 쪽으로 포커스를 돌려 키보드로 이어서 플레이
-      requestAnimationFrame(() => document.querySelector<HTMLElement>(RETURN_FOCUS)?.focus());
+      // (결과에서 '다른 레벨'을 누르면 보드가 없으므로 시작 화면의 첫 레벨 카드로)
+      requestAnimationFrame(() =>
+        (document.querySelector<HTMLElement>(RETURN_FOCUS) ?? document.querySelector<HTMLElement>("[data-level-card]"))?.focus(),
+      );
     };
   }, [labelledBy]);
   return (
@@ -596,6 +601,10 @@ function DirPad({ game, disabled, onStep, near }: { game: Game; disabled: boolea
             type="button"
             disabled={!ok}
             onClick={() => t !== null && onStep(t)}
+            onKeyDown={(e) => {
+              // 다른 버튼에서 Enter·Space 를 누른 채 포커스가 넘어와도 반복 입력으로 움직이지 않게
+              if (e.repeat && (e.key === "Enter" || e.key === " ")) e.preventDefault();
+            }}
             aria-label={`${d.name} 이동`}
             className="grid size-12 place-items-center rounded-xl bg-[#fff1c2] text-xl font-bold text-[#7b4a22] shadow-[0_3px_0_#e2c879] transition active:translate-y-[2px] active:shadow-none disabled:opacity-30 disabled:shadow-none"
           >
