@@ -50,7 +50,7 @@ const ELEMENTARY = make("e", [
   ["'library'는 어디일까요?", ["병원", "도서관", "우체국", "공원"], 2, "library는 책을 빌리는 도서관이에요."],
   ["A dog has ___ legs.", ["two", "three", "four", "six"], 3, "강아지 다리는 네 개, four!"],
   ["___ you like apples?", ["Do", "Does", "Are", "Is"], 1, "you에게 묻는 일반동사 질문은 Do로 시작해요."],
-  ["He ___ soccer every day.", ["play", "plays", "to play", "are play"], 2, "He, She 다음 일반동사에는 -s를 붙여요. He plays."],
+  ["He ___ soccer every day.", ["play", "plays", "to play", "are play"], 2, "현재형 문장에서 He, She, It 다음 일반동사에는 -s를 붙여요. He plays."],
   ["'tall'의 반대말은?", ["short", "long", "big", "small"], 1, "키가 tall(큰) ↔ short(작은)"],
   ["1년의 첫 번째 달은?", ["January", "June", "July", "March"], 1, "January는 1월이에요."],
   ["Can you swim? — Yes, I ___.", ["do", "can", "am", "is"], 2, "Can으로 물으면 can으로 대답해요."],
@@ -60,7 +60,7 @@ const ELEMENTARY = make("e", [
   ["It's three o'clock. 무슨 뜻일까요?", ["3시 정각이에요", "3분이에요", "3일이에요", "3살이에요"], 1, "o'clock은 '정각'이라는 뜻이에요."],
   ["She is ___ a book now. (지금 읽고 있는 중)", ["read", "reads", "reading", "readed"], 3, "지금 하고 있는 일은 be동사 + -ing로 말해요."],
   ["'kitchen'은 집의 어디일까요?", ["침실", "부엌", "욕실", "거실"], 2, "kitchen은 요리하는 부엌이에요."],
-  ["I have two ___.", ["box", "boxes", "boxs", "boxies"], 2, "x로 끝나는 단어는 -es를 붙여 여러 개를 나타내요."],
+  ["I have two ___.", ["box", "boxes", "boxs", "boxies"], 2, "box처럼 x로 끝나는 단어는 보통 -es를 붙여 여러 개를 나타내요."],
   ["The cat is ___ the box. (상자 안에)", ["on", "in", "under", "at"], 2, "in은 '~ 안에'예요. on은 위, under는 아래!"],
 ]);
 
@@ -71,7 +71,7 @@ const MIDDLE = make("m", [
   ["The boy ___ is singing is my brother.", ["which", "who", "what", "where"], 2, "사람을 꾸미는 주격 관계대명사는 who예요."],
   ["If I ___ a bird, I could fly.", ["am", "will be", "were", "be"], 3, "현재와 반대되는 상상(가정법 과거)은 과거형으로 써요. be동사는 보통 were를 쓰고, 일상 회화에서는 was도 써요."],
   ["He enjoys ___ soccer.", ["play", "to play", "playing", "played"], 3, "enjoy는 동명사(-ing)를 목적어로 써요."],
-  ["'decide'의 명사형은?", ["decision", "decisive", "decided", "deciding"], 1, "decide(결정하다) → decision(결정)"],
+  ["decide(결정하다)에서 '결정'을 뜻하는 명사는?", ["decision", "decisive", "decided", "deciding"], 1, "decide(결정하다) → decision(결정). decisive는 '결단력 있는'이라는 형용사예요."],
   ["The window was broken ___ Tom.", ["by", "with", "from", "of"], 1, "수동태에서 행동한 사람은 by로 나타내요."],
   ["I don't know ___ he lives.", ["where", "what", "which", "who"], 1, "'그가 어디에 사는지' — 간접의문문 where + 주어 + 동사"],
   ["She is old enough ___ alone.", ["travel", "to travel", "traveling", "traveled"], 2, "형용사 + enough + to부정사: ~할 만큼 충분히 …한"],

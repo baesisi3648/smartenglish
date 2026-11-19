@@ -68,7 +68,11 @@ const subscribe = (l: () => void) => {
 };
 
 type Review = { q: Question; choice: number; right: boolean };
-type Feedback = Review & { lostAfter: boolean };
+type Feedback = Review & { lostAfter: boolean; at: number };
+/** 해설이 뜬 직후 이 시간 안의 "계속" 입력은 무시 (Enter 를 누른 채 답해 해설을 건너뛰지 않게) */
+const FEEDBACK_HOLD_MS = 450;
+/** 문제·결과 창이 닫힌 뒤 포커스를 돌려줄 곳 (키보드로 계속 플레이) */
+const RETURN_FOCUS = '[aria-label="방향 버튼"] button:not(:disabled)';
 
 /** 방문 칸 숫자색 — 두 모래색 배경 모두에서 대비 4.5:1 이상 */
 const NUM_COLOR = ["", "#0a4f8f", "#14632c", "#a3361a", "#7f1d1d", "#5b1647", "#5b1647", "#5b1647", "#5b1647"];
@@ -131,7 +135,9 @@ export default function TrapGame({ bookingUrl }: { bookingUrl: string }) {
       const d = KEY_DIR[e.key];
       const { game: g, feedback: f, step: go } = live.current;
       if (!d || !g || f || g.status !== "play") return;
-      if ((e.target as HTMLElement)?.closest("dialog, input, textarea, select")) return;
+      // 게임 영역(보드·방향 버튼)이나 빈 곳에 포커스가 있을 때만 — 링크·'게임 방법' 등을 조작 중이면 방향키는 원래대로
+      const el = document.activeElement;
+      if (el && el !== document.body && !el.closest("[data-game-area]")) return;
       const t = target(g.pos, d[0], d[1]);
       if (t === null) return;
       e.preventDefault();
@@ -149,7 +155,7 @@ export default function TrapGame({ bookingUrl }: { bookingUrl: string }) {
     const next = answer(game, choice, bank);
     const right = choice === q.answer;
     setReviews((r) => [...r, { q, choice, right }]);
-    setFeedback({ q, choice, right, lostAfter: next.status === "lost" });
+    setFeedback({ q, choice, right, lostAfter: next.status === "lost", at: Date.now() });
     if (!right) setBump((b) => b + 1);
     setGame(next);
   }
@@ -164,7 +170,7 @@ export default function TrapGame({ bookingUrl }: { bookingUrl: string }) {
   return (
     <div className="mx-auto grid max-w-5xl gap-5 px-4 pb-16 pt-4 lg:grid-cols-[minmax(0,1fr)_300px] lg:items-start">
       {/* ── 보드 ── */}
-      <div key={bump} className={bump ? "anim-shake" : ""}>
+      <div key={bump} className={bump ? "anim-shake" : ""} data-game-area>
         <div className="mb-3 flex items-center justify-between gap-2">
           <div className="flex items-center gap-1 text-xl" aria-label={`하트 ${game.hearts}개`}>
             {Array.from({ length: START_HEARTS }, (_, i) => (
@@ -269,7 +275,13 @@ export default function TrapGame({ bookingUrl }: { bookingUrl: string }) {
               <button
                 type="button"
                 autoFocus
-                onClick={() => setFeedback(null)}
+                onKeyDown={(e) => {
+                  if (e.repeat) e.preventDefault();
+                }}
+                onClick={() => {
+                  if (Date.now() - feedback.at < FEEDBACK_HOLD_MS) return;
+                  setFeedback(null);
+                }}
                 className="mt-4 w-full rounded-full bg-hb-navy py-3.5 font-extrabold text-white shadow-[0_4px_0_#00317a] active:translate-y-[2px] active:shadow-none"
               >
                 {feedback.lostAfter ? "결과 보기" : "계속 가기 →"}
@@ -279,7 +291,7 @@ export default function TrapGame({ bookingUrl }: { bookingUrl: string }) {
             quizQ && (
               <div className="anim-pop">
                 <p className="font-round text-sm text-[#a3361a]">🪤 덫을 밟았어요! 답하면 덫이 사라져요 · 맞히면 +3점, 틀리면 ❤️ −1</p>
-                <p id="quiz-title" tabIndex={-1} autoFocus className="mt-2 font-display text-2xl leading-snug text-ink outline-none sm:text-[1.7rem]">
+                <p id="quiz-title" tabIndex={-1} className="mt-2 font-display text-2xl leading-snug text-ink outline-none sm:text-[1.7rem]">
                   {quizQ.question}
                 </p>
                 <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -461,7 +473,7 @@ function Result({
   return (
     <div className="anim-pop text-center">
       <p className="text-5xl">{won ? "🌴" : "🌵"}</p>
-      <p id="result-title" tabIndex={-1} autoFocus className="mt-2 font-display text-3xl text-[#7b4a22] outline-none">
+      <p id="result-title" tabIndex={-1} className="mt-2 font-display text-3xl text-[#7b4a22] outline-none">
         {won ? "오아시스 도착!" : "하트를 모두 썼어요"}
       </p>
       {won && (
@@ -538,10 +550,14 @@ function Modal({ children, labelledBy }: { children: React.ReactNode; labelledBy
     const d = ref.current;
     if (!d) return;
     if (!d.open) d.showModal();
+    // React 는 <p> 의 autoFocus 를 처리하지 않으므로 직접: 창 안 autofocus 버튼(해설의 '계속') → 없으면 제목(질문)
+    (d.querySelector<HTMLElement>("[autofocus]") ?? document.getElementById(labelledBy))?.focus();
     return () => {
       if (d.open) d.close();
+      // 닫힌 뒤 보드 쪽으로 포커스를 돌려 키보드로 이어서 플레이
+      requestAnimationFrame(() => document.querySelector<HTMLElement>(RETURN_FOCUS)?.focus());
     };
-  }, []);
+  }, [labelledBy]);
   return (
     <dialog
       ref={ref}
