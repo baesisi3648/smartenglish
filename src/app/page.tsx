@@ -103,6 +103,9 @@ function Header() {
           <a href="#programs" className="hover:text-hb-blue">
             프로그램
           </a>
+          <a href="#game" className="hover:text-hb-blue">
+            영어 게임
+          </a>
           <a href="#method" className="hover:text-hb-blue">
             수업 방식
           </a>
@@ -255,6 +258,60 @@ const method = [
   ["성향과 속도에 맞춘 지도", "같은 교재라도 아이의 성향과 속도에 맞춰 진도와 설명 방식을 조절합니다."],
   ["수업 후 즉각 피드백", "그날 배운 내용은 그날 확인하고, 학부모님께도 학습 상황을 공유합니다."],
 ];
+
+/** 영어 놀이터: 단어 사파리 게임으로 연결 (보드 미리보기는 장식) */
+function GameTeaser() {
+  const preview = [
+    "g g g g g g o o",
+    "g g g g g g o o",
+    "g g s g g g g g",
+    "g s 2 s g g g g",
+    "g s 1 g g g g g",
+    "s 1 s g g g g g",
+    "s s g g g g g g",
+    "L s g g g g g g",
+  ].map((r) => r.split(" "));
+  return (
+    <section id="game" className="relative overflow-hidden bg-[linear-gradient(180deg,#fff8e6,#fbefd0)]">
+      <div className="mx-auto grid max-w-6xl items-center gap-10 px-4 py-20 sm:px-6 md:grid-cols-[1.1fr_1fr]">
+        <div>
+          <SectionTitle eyebrow="ENGLISH PLAYGROUND">1분 영어 게임, 단어 사파리</SectionTitle>
+          <p className="mt-4 max-w-md text-[15px] leading-7 text-ink-soft">
+            덫을 피해 오아시스까지! 덫을 밟으면 영어 문제를 풀어야 지나갈 수 있어요. 파닉스·초등·중등 레벨로 우리 아이 영어를
+            가볍게 확인해 보세요.
+          </p>
+          <div className="mt-6 flex flex-wrap gap-3">
+            <Link
+              href="/game"
+              className="inline-flex items-center gap-2 rounded-full bg-hb-navy px-7 py-3.5 font-extrabold text-white shadow-[0_4px_0_#00317a] hover:brightness-110"
+            >
+              🦁 게임 시작하기
+            </Link>
+            <span className="self-center text-sm text-ink-soft">설치 없이 · 무료 · 폰에서도 OK</span>
+          </div>
+        </div>
+        <Link href="/game" aria-label="단어 사파리 게임 하러 가기" className="group mx-auto block w-full max-w-sm">
+          <div className="rotate-[-2deg] rounded-[26px] bg-[#b9773e] p-2.5 shadow-[0_10px_0_#8a5426,0_18px_30px_rgb(0_0_0/0.15)] transition group-hover:rotate-0">
+            <div className="grid grid-cols-8 gap-[3px] rounded-[18px] bg-[#7b4a22] p-[3px]">
+              {preview.flatMap((row, r) =>
+                row.map((t, c) => (
+                  <span
+                    key={`${r}-${c}`}
+                    className={`grid aspect-square place-items-center rounded-[5px] font-round text-sm sm:text-base ${
+                      t === "o" ? "bg-[#3fb3e6]" : t === "g" ? ((r + c) % 2 ? "bg-[#84c561]" : "bg-[#8fcf6b]") : "bg-[#f4dfa9]"
+                    }`}
+                  >
+                    {t === "L" ? "🦁" : t === "1" ? <span className="text-hb-blue">1</span> : t === "2" ? <span className="text-[#1f8a3e]">2</span> : r === 0 && c === 6 ? "🌴" : ""}
+                  </span>
+                )),
+              )}
+            </div>
+          </div>
+        </Link>
+      </div>
+    </section>
+  );
+}
 
 function Method() {
   return (
@@ -534,6 +591,7 @@ export default function Home() {
         <Hero />
         <Reviews />
         <Programs />
+        <GameTeaser />
         <Method />
         <Start />
         <Story />
