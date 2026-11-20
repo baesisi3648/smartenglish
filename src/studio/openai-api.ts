@@ -1,4 +1,5 @@
 import "server-only";
+import { GPT_TRIAL_UNTIL } from "./agents";
 import { AgentError } from "./errors";
 
 /**
@@ -11,7 +12,11 @@ export function openaiTrialKey() {
   const k = process.env.OPENAI_API_KEY?.trim() ?? "";
   return /^sk-[A-Za-z0-9_-]{20,200}$/.test(k) ? k : "";
 }
-export const openaiTrialConfigured = () => !!openaiTrialKey();
+/** 체험 기간(한국 날짜 기준 GPT_TRIAL_UNTIL 까지) 안이고 서버 키가 있을 때만 켠다 */
+export function openaiTrialConfigured(now = Date.now()) {
+  const kstDay = new Date(now + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  return kstDay <= GPT_TRIAL_UNTIL && !!openaiTrialKey();
+}
 
 const RESPONSES = "https://api.openai.com/v1/responses";
 const IMAGES = "https://api.openai.com/v1/images/generations";

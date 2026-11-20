@@ -63,13 +63,16 @@ export const DEEPSEEK_AGENT: ApiAgentDef = {
   loginHelp: "서버에 등록된 DeepSeek API 키로 동작합니다. 별도 로그인은 필요 없어요.",
 };
 
+/** GPT 체험 마지막 날 (한국 날짜, 이날까지 사용 가능). 다음 날부터 선택지에서 사라진다 */
+export const GPT_TRIAL_UNTIL = "2026-11-30";
+const [, untilM, untilD] = GPT_TRIAL_UNTIL.split("-").map(Number);
+
 export const GPT_TRIAL_AGENT: ApiAgentDef = {
   id: "gpt",
   kind: "api",
-  label: "GPT 체험 (하루 10회)",
-  plan: "키 입력 없이 GPT로 · 하루 10회까지",
-  loginHelp:
-    "서버에 등록된 OpenAI 키로 하루 10회(초안·글 추천·고치기 합산)까지 써 볼 수 있어요. AI 그림은 'GPT (내 API 키)'에서만 됩니다.",
+  label: `GPT 체험 (하루 10회 · ${untilM}/${untilD}까지)`,
+  plan: `키 입력 없이 GPT로 · 하루 10회 · ${untilM}월 ${untilD}일까지`,
+  loginHelp: `서버에 등록된 OpenAI 키로 하루 10회(초안·글 추천·고치기 합산)까지 써 볼 수 있어요. 체험은 ${untilM}월 ${untilD}일까지이고, AI 그림은 'GPT (내 API 키)'에서만 됩니다.`,
 };
 
 export const OPENAI_AGENT: ByokAgentDef = {
