@@ -177,7 +177,7 @@ const EVERGREEN: Record<string, Seed[]> = {
       outline: ["소리와 글자를 잇는 파닉스", "파닉스 다음 읽기 단계", "아이 속도에 맞춘 1:1 학습"],
       needs: [],
       keywords: ["파닉스", "초등 영어", "의왕 영어"],
-      dup: /파닉스/,
+      dup: /파닉스.*(왜|먼저|중요)/,
     },
     {
       id: "vocab-habit",
@@ -187,6 +187,42 @@ const EVERGREEN: Record<string, Seed[]> = {
       needs: [],
       keywords: ["초등 중등 영어", "의왕 영어학원"],
       dup: /단어.*문장|문장.*단어/,
+    },
+    {
+      id: "reading-habit",
+      type: "column",
+      title: "영어 책 읽기, 매일 10분의 힘",
+      outline: ["짧아도 매일 읽는 습관", "아이 수준에 맞는 책 고르기", "읽은 내용을 말로 확인하기"],
+      needs: [],
+      keywords: ["영어 원서 읽기", "초등 영어"],
+      dup: /책 ?읽기|원서|독서/,
+    },
+    {
+      id: "grammar-when",
+      type: "column",
+      title: "영어 문법, 언제부터 시작할까요?",
+      outline: ["문법을 시작하기 좋은 때", "외우기보다 문장으로 익히기", "중등 내신과 이어지는 기초"],
+      needs: [],
+      keywords: ["중등 영어", "초등 중등 영어"],
+      dup: /문법.*(언제|시작)/,
+    },
+    {
+      id: "home-help",
+      type: "column",
+      title: "집에서 영어 공부, 부모님이 도와줄 수 있는 것",
+      outline: ["잔소리보다 관심", "칭찬으로 이어 가는 습관", "교습소와 함께 확인하는 학습"],
+      needs: [],
+      keywords: ["초등 영어", "의왕 영어"],
+      dup: /집에서|부모님이/,
+    },
+    {
+      id: "one-on-one",
+      type: "column",
+      title: "1:1 맞춤 학습이 필요한 이유",
+      outline: ["아이마다 다른 속도와 빈틈", "진단 → 맞춤 진도 → 반복 확인", "스스로 하는 힘으로 이어지는 과정"],
+      needs: [],
+      keywords: ["의왕 영어학원", "초등 중등 영어"],
+      dup: /1:1|맞춤 학습/,
     },
   ],
   growth: [
@@ -245,12 +281,14 @@ export function quickIdeas(today: Date, posts: BlogPost[]): QuickIdea[] {
     for (const seed of SEASON_SEEDS[s.label] ?? []) push(seed, `📅 ${s.label} 시기 (${s.ongoing ? "지금" : "곧"})`, "season");
   }
 
-  // 2) 오래 안 쓴 유형 순 (한 번도 없으면 가장 앞)
+  // 2) 오래 안 쓴 유형 순 (한 번도 없으면 가장 앞). 블로그 글을 못 불러왔으면(0편) 공백을 판단하지 않는다
+  const gapReason = (label: string, daysAgo: number | null) =>
+    posts.length ? `🗂 ${label} 글을 ${DAY_LABEL(daysAgo)}` : "💡 언제 올려도 좋은 주제";
   const gaps = analyzePosts(posts, today)
     .types.filter((t) => (EVERGREEN[t.id] ?? []).length > 0)
     .sort((a, b) => (b.daysAgo ?? 9999) - (a.daysAgo ?? 9999));
   for (const t of gaps) {
-    for (const seed of EVERGREEN[t.id]) push(seed, `🗂 ${t.label.split(" · ")[0]} 글을 ${DAY_LABEL(t.daysAgo)}`, "gap");
+    for (const seed of EVERGREEN[t.id]) push(seed, gapReason(t.label.split(" · ")[0], t.daysAgo), "gap");
   }
 
   // 3) 원장님 정보 없이 바로 쓸 수 있는 주제(needs 없음)를 최소 1개 보장 — "오늘의 맞춤 추천"·자동 글용
@@ -259,7 +297,7 @@ export function quickIdeas(today: Date, posts: BlogPost[]): QuickIdea[] {
     const seed = EVERGREEN.column.find((s) => fresh(s) && !out.some((o) => o.id === s.id));
     if (seed) {
       if (out.length >= MAX_IDEAS) out.pop();
-      push(seed, column ? `🗂 교육 정보 칼럼 글을 ${DAY_LABEL(column.daysAgo)}` : "💡 언제 올려도 좋은 주제", "gap");
+      push(seed, column ? gapReason("교육 정보 칼럼", column.daysAgo) : "💡 언제 올려도 좋은 주제", "gap");
     }
   }
   return out;

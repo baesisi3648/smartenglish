@@ -33,6 +33,7 @@ export async function getLatestPosts(limit = 6): Promise<BlogPost[]> {
   try {
     const res = await fetch(academy.links.blogRss, {
       headers: { "User-Agent": "Mozilla/5.0" },
+      signal: AbortSignal.timeout(5000), // RSS가 느려도 페이지(스튜디오 포함)가 오래 막히지 않게
     });
     if (!res.ok) return [];
     const xml = await res.text();
@@ -47,9 +48,8 @@ export async function getLatestPosts(limit = 6): Promise<BlogPost[]> {
         title: pick(it, "title"),
         link: pick(it, "link").split("?")[0],
         category: pick(it, "category") || undefined,
-        date: isNaN(d.getTime())
-          ? ""
-          : `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, "0")}.${String(d.getDate()).padStart(2, "0")}`,
+        // 서버 시간대와 무관하게 한국 날짜로
+        date: isNaN(d.getTime()) ? "" : new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul" }).format(d).replace(/-/g, "."),
       };
     });
   } catch {

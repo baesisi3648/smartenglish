@@ -21,34 +21,54 @@ export type Block =
 const PHOTO = /^\[사진\s*(\d+)\]$/;
 const FIGURE = /^\[그림\s*[:：]\s*(.+?)\s*\]$/;
 
-/** "**키워드**" 표시를 조각으로. 짝이 안 맞는 ** 는 글자에서 지운다 */
+/** 강조 한 쌍: 한 줄 안에서 ** 바로 안쪽이 공백이 아닌 구절 */
+const PAIR = /\*\*(?=\S)([^*\n]*?\S)\*\*/g;
+
+/**
+ * "**키워드**" 표시를 조각으로. 짝이 맞는 것만 강조로 쓰고,
+ * 짝 없이 남은 ** 는 AI가 흘린 표시로 보고 지운다 (블로그 글에 별표 두 개를 그대로 쓸 일은 없음).
+ */
 export function parseInline(line: string): Span[] {
-  const parts = line.split("**");
-  if (parts.length < 3) return [{ text: line.replace(/\*\*/g, "") }];
   const out: Span[] = [];
-  parts.forEach((p, i) => {
-    if (!p) return;
-    // 홀수 번째 조각 = ** 사이. 마지막 조각이 홀수면 닫는 ** 가 없는 것 → 일반 글자
-    const key = i % 2 === 1 && i < parts.length - 1;
-    out.push(key && p.trim() ? { text: p, key: true } : { text: p });
-  });
+  let last = 0;
+  for (const m of line.matchAll(PAIR)) {
+    const before = stripMarks(line.slice(last, m.index));
+    if (before) out.push({ text: before });
+    out.push({ text: m[1], key: true });
+    last = m.index + m[0].length;
+  }
+  const rest = stripMarks(line.slice(last));
+  if (rest || out.length === 0) out.push({ text: rest });
   return out;
 }
 
-const stripMarks = (s: string) => s.replace(/\*\*/g, "");
+function stripMarks(s: string) {
+  return s.replace(/\*\*/g, "");
+}
 
-/** 인사말·끝인사·연락처 줄 (template.ts 가 붙이는 고정 문구) — 블로그처럼 굵게 */
-function roleOf(line: string): "greeting-name" | "thanks" | "contact" | undefined {
-  if (/^스마트해법영어 백운밸리점입니다/.test(line)) return "greeting-name";
-  if (/^"\s*감사합니다\s*"$/.test(line)) return "thanks";
-  if (/^(📞|📍)|^0\d{1,2}-\d{3,4}-\d{4}$/.test(line)) return "contact";
+const THANKS = /^"\s*감사합니다\s*"$/;
+
+/**
+ * 인사말·끝인사·연락처 줄 (template.ts 가 붙이는 고정 문구) — 블로그처럼 굵게.
+ * 본문 중간의 비슷한 줄(📍 학습 포인트 등)은 건드리지 않도록 위치로 판단한다:
+ * 교습소 이름은 맨 앞 두 줄 안, 연락처는 마지막 "감사합니다" 뒤에서만.
+ */
+function roleOf(line: string, i: number, outroFrom: number): "greeting-name" | "thanks" | "contact" | undefined {
+  if (i <= 1 && /^스마트해법영어 백운밸리점입니다/.test(line)) return "greeting-name";
+  if (i === outroFrom) return "thanks";
+  if (outroFrom >= 0 && i > outroFrom && /^(📞|📍)|^0\d{1,2}-\d{3,4}-\d{4}$/.test(line)) return "contact";
   return undefined;
 }
 
+/** 단독 줄 자리 표시를 강조로 감싸도(**[사진1]**) 자리 표시로 본다 */
+const unwrap = (line: string) => line.replace(/^\*\*\s*(\[[^\]]+\])\s*\*\*$/, "$1");
+
 export function parseBody(body: string): Block[] {
   let fig = 0;
-  return body.split("\n").map((raw): Block => {
-    const line = raw.trim();
+  const lines = body.split("\n");
+  const outroFrom = lines.findLastIndex((l) => THANKS.test(l.trim()));
+  return lines.map((raw, i): Block => {
+    const line = unwrap(raw.trim());
     if (!line) return { kind: "blank" };
     const p = line.match(PHOTO);
     if (p) return { kind: "photo", n: Number(p[1]) };
@@ -59,7 +79,7 @@ export function parseBody(body: string): Block[] {
       const text = line.replace(/^>\s?/, "");
       return { kind: "quote", text: stripMarks(text), spans: parseInline(text) };
     }
-    return { kind: "text", text: stripMarks(line), spans: parseInline(line), role: roleOf(line) };
+    return { kind: "text", text: stripMarks(line), spans: parseInline(line), role: roleOf(line, i, outroFrom) };
   });
 }
 
@@ -88,11 +108,11 @@ export function toPlainText(body: string): string {
 
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
-/** 글자 색·굵기 (붙여넣기 후에도 유지되는 인라인 서식) */
-const bold = (inner: string, color: string) => `<span style="color:${color};"><b>${inner}</b></span>`;
+/** 글자 색·굵기·크기 (붙여넣기 후에도 유지되는 인라인 서식 — 에디터 기본 크기는 15px이라 16px을 글자마다 지정) */
+const bold = (inner: string, color: string) => `<span style="color:${color};font-size:${S.fontSize}px;"><b>${inner}</b></span>`;
 
 /** 색만 입힌 글자 — 바깥 div 의 color 는 에디터가 버릴 수 있어 글자마다 색을 단다 (원장님 글도 같은 방식) */
-const tint = (inner: string, color: string) => `<span style="color:${color};">${inner}</span>`;
+const tint = (inner: string, color: string) => `<span style="color:${color};font-size:${S.fontSize}px;">${inner}</span>`;
 
 function spansHtml(spans: Span[], baseColor: string, baseBold: boolean) {
   return spans
@@ -113,7 +133,9 @@ export function toEditorHtml(
 ): string {
   const align = center ? "text-align:center;" : "";
   const p = (inner: string) => `<p style="${align}">${inner}</p>`;
-  const img = (src: string) => p(`<img src="${src}" style="max-width:100%;" width="740" alt="">`);
+  // 이미지는 이 화면이 만든 data URL(JPEG/PNG/WebP base64)만 넣는다
+  const safe = (src: string | undefined) => (src && /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(src) ? src : undefined);
+  const img = (src: string) => p(`<img src="${esc(src)}" style="max-width:100%;" width="740" alt="">`);
   const html = parseBody(body)
     .map((b) => {
       switch (b.kind) {
@@ -123,10 +145,14 @@ export function toEditorHtml(
           return p(bold(esc(b.text), S.headingColor));
         case "quote":
           return p(spansHtml(b.spans, S.strongColor, true));
-        case "photo":
-          return photos[b.n - 1] ? img(photos[b.n - 1]!) : p(`[사진${b.n}]`);
-        case "figure":
-          return figures[b.n - 1] ? img(figures[b.n - 1]!) : p(`[그림${b.n}]`);
+        case "photo": {
+          const src = safe(photos[b.n - 1]);
+          return src ? img(src) : p(tint(`[사진${b.n}]`, S.bodyColor));
+        }
+        case "figure": {
+          const src = safe(figures[b.n - 1]);
+          return src ? img(src) : p(tint(`[그림${b.n}]`, S.bodyColor));
+        }
         default:
           if (b.role === "greeting-name") {
             return p(`${bold("스마트해법영어 백운밸리점", S.nameColor)}${tint(esc(b.text.replace(/^스마트해법영어 백운밸리점/, "")), S.bodyColor)}`);

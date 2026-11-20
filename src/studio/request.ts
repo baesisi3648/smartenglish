@@ -7,6 +7,7 @@ import { verifySessionToken, SESSION_COOKIE } from "./auth";
 import { runDeepseek } from "./deepseek-api";
 import { AgentError, redactSecrets } from "./errors";
 import { runGemini } from "./gemini-api";
+import type { OnDelta } from "./sse";
 import { DEFAULT_OPENAI_MODEL, OPENAI_KEY_PATTERN, isOpenAIModel } from "./openai-models";
 import { openaiTrialKey, runOpenAI } from "./openai-api";
 import { TRIAL_PER_DAY, availableAgents, isTrustedStudioRequest, refundTrialQuota, studioEnabled, takeApiQuota, takeTrialQuota } from "./guard";
@@ -83,10 +84,12 @@ export async function runModel(
   buildPrompt: (canSeeImages: boolean) => string,
   images: PromptImage[],
   signal: AbortSignal,
+  /** 있으면 AI가 쓰는 글 조각을 받는 대로 넘긴다 (화면 스트리밍) */
+  onDelta?: OnDelta,
 ) {
   if (def.id === "gpt") {
     try {
-      const run = await runOpenAI(buildPrompt(true), images, { apiKey: openaiTrialKey(), model: DEFAULT_OPENAI_MODEL, signal });
+      const run = await runOpenAI(buildPrompt(true), images, { apiKey: openaiTrialKey(), model: DEFAULT_OPENAI_MODEL, signal, onDelta });
       return { text: redactSecrets(run.text), imagesSent: run.imagesSent };
     } catch (e) {
       refundTrialQuota(); // 실패한 요청은 하루 횟수에서 빼지 않는다
@@ -95,12 +98,12 @@ export async function runModel(
   }
   const run =
     def.kind === "acp"
-      ? await runAgent(def.id, buildPrompt, images, { signal })
+      ? await runAgent(def.id, buildPrompt, images, { signal, onDelta })
       : def.kind === "byok"
-        ? await runOpenAI(buildPrompt(true), images, { apiKey: byok!.apiKey, model: byok!.model, signal })
+        ? await runOpenAI(buildPrompt(true), images, { apiKey: byok!.apiKey, model: byok!.model, signal, onDelta })
         : def.id === "gemini"
-          ? await runGemini(buildPrompt(true), images, { signal })
-          : await runDeepseek(buildPrompt, images, { signal });
+          ? await runGemini(buildPrompt(true), images, { signal, onDelta })
+          : await runDeepseek(buildPrompt, images, { signal, onDelta });
   return { text: redactSecrets(run.text), imagesSent: run.imagesSent };
 }
 
@@ -129,4 +132,75 @@ export function errorResponse(e: unknown) {
   }
   const id = logIncident("INTERNAL", e instanceof Error ? (e.stack ?? e.message) : String(e));
   return fail(500, "INTERNAL", `알 수 없는 오류가 났습니다. 다시 시도해 주세요. (오류 번호 ${id})`);
+}
+
+/** 화면이 스트리밍(쓰는 대로 보기)을 요청했는지 */
+export function wantsStream(req: NextRequest) {
+  return req.headers.get("x-stream") === "1";
+}
+
+/** 비밀값 가림이 조각 경계에 걸리지 않게, 맨 끝 몇백 자는 다음 조각이 올 때까지 보내지 않는다 (키 길이보다 길게) */
+const STREAM_HOLD = 320;
+const STREAM_FLUSH_MS = 120;
+
+/**
+ * 결과는 기존 JSON 응답 그대로 두고, 그 전에 AI가 쓰는 글을 NDJSON 줄로 흘려보낸다.
+ *   {"t":"d","v":"이어 쓴 글"}  {"t":"reset","v":"전체 글"}  {"t":"end","status":200,"body":{...기존 응답}}
+ * 보내는 글은 매번 redactSecrets 를 거친 누적본에서 잘라 낸다 (모델 출력에 서버 비밀값이 섞여도 화면에 나가지 않게).
+ */
+export function streamResponse(work: (onDelta: OnDelta) => Promise<Response>) {
+  const enc = new TextEncoder();
+  let acc = "";
+  let sent = "";
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let closed = false;
+
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const write = (obj: unknown) => {
+        if (closed) return;
+        try {
+          controller.enqueue(enc.encode(JSON.stringify(obj) + "\n"));
+        } catch {
+          closed = true; // 화면이 연결을 끊음
+        }
+      };
+      const flush = () => {
+        timer = null;
+        const red = redactSecrets(acc);
+        const stable = red.slice(0, Math.max(0, red.length - STREAM_HOLD));
+        if (stable.length <= sent.length) return;
+        if (stable.startsWith(sent)) write({ t: "d", v: stable.slice(sent.length) });
+        else write({ t: "reset", v: stable });
+        sent = stable;
+      };
+      const onDelta: OnDelta = (t) => {
+        acc += t;
+        if (!timer) timer = setTimeout(flush, STREAM_FLUSH_MS);
+      };
+      work(onDelta)
+        .catch((e) => errorResponse(e))
+        .then(async (res) => {
+          if (timer) clearTimeout(timer);
+          write({ t: "end", status: res.status, body: await res.json().catch(() => ({ success: false, error: "응답 오류" })) });
+        })
+        .finally(() => {
+          if (!closed) {
+            closed = true;
+            controller.close();
+          }
+        });
+    },
+    cancel() {
+      closed = true;
+      if (timer) clearTimeout(timer);
+    },
+  });
+  return new Response(body, {
+    headers: {
+      "Content-Type": "application/x-ndjson; charset=utf-8",
+      "Cache-Control": "no-store",
+      "X-Accel-Buffering": "no",
+    },
+  });
 }

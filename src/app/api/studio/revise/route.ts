@@ -1,7 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { sanitizeKeywords } from "@/studio/post-types";
 import { buildRevisePrompt, parseDraft } from "@/studio/prompt";
-import { checkQuota, checkStudioRequest, errorResponse, fail, resolveAgent, runModel } from "@/studio/request";
+import { checkQuota, checkStudioRequest, errorResponse, fail, resolveAgent, runModel, streamResponse, wantsStream } from "@/studio/request";
+import type { OnDelta } from "@/studio/sse";
 import { coreBody, withKeyword, wrapBody } from "@/studio/template";
 
 export const maxDuration = 300;
@@ -37,21 +38,25 @@ export async function POST(req: NextRequest) {
   const overQuota = checkQuota(req, agent);
   if (overQuota) return overQuota;
 
-  try {
-    const prompt = buildRevisePrompt({ title, body, instruction, topic });
-    const run = await runModel(agent, () => prompt, [], req.signal);
-    const draft = parseDraft(run.text);
-    if (!draft) {
-      return NextResponse.json(
-        { success: false, code: "PARSE_FAILED", error: "AI 응답을 해석하지 못했습니다. 다시 시도해 주세요.", raw: run.text.slice(0, 4000) },
-        { status: 502 },
-      );
+  // 결과 만들기 (스트리밍이면 쓰는 대로 화면에 보내고, 끝나면 같은 JSON을 마지막 줄로)
+  const produce = async (onDelta?: OnDelta) => {
+    try {
+      const prompt = buildRevisePrompt({ title, body, instruction, topic });
+      const run = await runModel(agent, () => prompt, [], req.signal, onDelta);
+      const draft = parseDraft(run.text);
+      if (!draft) {
+        return NextResponse.json(
+          { success: false, code: "PARSE_FAILED", error: "AI 응답을 해석하지 못했습니다. 다시 시도해 주세요.", raw: run.text.slice(0, 4000) },
+          { status: 502 },
+        );
+      }
+      return NextResponse.json({
+        success: true,
+        data: { title: withKeyword(draft.title || title, keyword), body: wrapBody(draft.body), notes: draft.notes },
+      });
+    } catch (e) {
+      return errorResponse(e);
     }
-    return NextResponse.json({
-      success: true,
-      data: { title: withKeyword(draft.title || title, keyword), body: wrapBody(draft.body), notes: draft.notes },
-    });
-  } catch (e) {
-    return errorResponse(e);
-  }
+  };
+  return wantsStream(req) ? streamResponse(produce) : produce();
 }

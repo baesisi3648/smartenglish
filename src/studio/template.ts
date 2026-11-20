@@ -51,9 +51,11 @@ export function withKeyword(title: string, keyword: string) {
 
 /** AI 본문 → 인사말 + 본문 + 끝인사·연락처 (인사·연락처는 AI가 아니라 SSOT에서) */
 export function wrapBody(core: string) {
+  // AI가 인사말을 넣었으면 맨 앞에 있을 때만 뗀다 (본문 중간 문장은 건드리지 않음)
   const clean = core
-    .replace(/^안녕하세요[^\n]*\n?/m, "")
-    .replace(/스마트해법영어 백운밸리점입니다\.?\n?/, "")
+    .trim()
+    .replace(/^안녕하세요[^\n]*\n+/, "")
+    .replace(/^스마트해법영어 백운밸리점입니다\.?[^\n]*\n*/, "")
     .trim();
   return `${INTRO}\n\n${clean}\n\n\n${outro()}`;
 }
@@ -62,7 +64,8 @@ export function wrapBody(core: string) {
 export function coreBody(full: string) {
   let text = full.replace(/\r/g, "");
   if (text.startsWith(INTRO)) text = text.slice(INTRO.length);
-  const end = text.indexOf(`" 감사합니다 "`);
+  // 끝인사는 시스템이 맨 뒤에 붙이므로 마지막 것에서 자른다 (본문 중간에 같은 문구가 있어도 유지)
+  const end = text.lastIndexOf(`" 감사합니다 "`);
   if (end >= 0) text = text.slice(0, end);
   return text.trim();
 }

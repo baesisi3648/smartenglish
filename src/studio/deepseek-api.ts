@@ -1,5 +1,6 @@
 import "server-only";
 import { AgentError } from "./errors";
+import { parseJson, sseData, type OnDelta } from "./sse";
 
 /**
  * DeepSeek API(OpenAI 호환 Chat Completions) 호출 — 웹 데모용.
@@ -29,7 +30,39 @@ type ChatResponse = {
   error?: { message?: string };
 };
 
-async function call(content: Content[], signal: AbortSignal) {
+type StreamChunk = { choices?: { delta?: { content?: string | null }; finish_reason?: string | null }[]; error?: { message?: string } };
+
+function netError(e: unknown) {
+  if (e instanceof AgentError) return e;
+  if (e instanceof Error && e.name === "TimeoutError") return new AgentError("TIMEOUT", "DeepSeek 응답 시간 초과");
+  return new AgentError("AGENT_ERROR", "DeepSeek에 연결하지 못했습니다. 잠시 뒤 다시 시도해 주세요.", String(e));
+}
+
+/** 스트리밍 조각을 이어 붙여 일반 응답 모양으로 (글 조각마다 onDelta) */
+async function readStream(body: ReadableStream<Uint8Array>, onDelta: OnDelta): Promise<ChatResponse> {
+  let text = "";
+  let finish: string | undefined;
+  try {
+    for await (const data of sseData(body)) {
+      if (data.trim() === "[DONE]") break;
+      const chunk = parseJson<StreamChunk>(data);
+      if (!chunk) continue;
+      if (chunk.error) throw new AgentError("AGENT_ERROR", "DeepSeek에서 오류가 났습니다. 다시 시도해 주세요.", chunk.error.message);
+      const c = chunk.choices?.[0];
+      if (c?.finish_reason) finish = c.finish_reason;
+      const piece = c?.delta?.content ?? "";
+      if (piece) {
+        text += piece;
+        onDelta(piece);
+      }
+    }
+  } catch (e) {
+    throw netError(e);
+  }
+  return { choices: [{ message: { content: text }, finish_reason: finish }] };
+}
+
+async function call(content: Content[], signal: AbortSignal, onDelta?: OnDelta) {
   let res: Response;
   try {
     res = await fetch(ENDPOINT, {
@@ -41,21 +74,21 @@ async function call(content: Content[], signal: AbortSignal) {
         response_format: { type: "json_object" },
         max_tokens: 6144, // 출력 상한 (본문 900~1600자 + JSON 여유, 비용 상한 역할)
         temperature: 0.8,
-        stream: false,
+        stream: !!onDelta,
       }),
       signal,
     });
   } catch (e) {
-    if (e instanceof Error && e.name === "TimeoutError") throw new AgentError("TIMEOUT", "DeepSeek 응답 시간 초과");
-    throw new AgentError("AGENT_ERROR", "DeepSeek에 연결하지 못했습니다. 잠시 뒤 다시 시도해 주세요.", String(e));
+    throw netError(e);
   }
+  if (res.ok && onDelta && res.body) return { res, json: await readStream(res.body, onDelta) };
   return { res, json: (await res.json().catch(() => ({}))) as ChatResponse };
 }
 
 export async function runDeepseek(
   buildPrompt: (canSeeImages: boolean) => string,
   images: { data: string; mimeType: string }[],
-  { timeoutMs = 150_000, signal }: { timeoutMs?: number; signal?: AbortSignal } = {},
+  { timeoutMs = 150_000, signal, onDelta }: { timeoutMs?: number; signal?: AbortSignal; onDelta?: OnDelta } = {},
 ): Promise<{ text: string; imagesSent: boolean }> {
   const ctrl = AbortSignal.any([AbortSignal.timeout(timeoutMs), ...(signal ? [signal] : [])]);
   const withImages = deepseekSendsImages() && images.length > 0;
@@ -72,11 +105,11 @@ export async function runDeepseek(
   };
 
   let imagesSent = withImages;
-  let { res, json } = await call(content(withImages), ctrl);
+  let { res, json } = await call(content(withImages), ctrl, onDelta);
   // 사진 입력을 지원하지 않는 모델이면 글만으로 재시도
   if (withImages && res.status === 400 && /image|vision|multimodal|content type|unsupported/i.test(json.error?.message ?? "")) {
     imagesSent = false;
-    ({ res, json } = await call(content(false), ctrl));
+    ({ res, json } = await call(content(false), ctrl, onDelta));
   }
 
   if (!res.ok) {

@@ -7,6 +7,7 @@ import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 import { ACP_AGENTS, type AcpAgentId } from "./agents";
 import { AgentError } from "./errors";
+import type { OnDelta } from "./sse";
 
 export { AgentError };
 
@@ -73,7 +74,7 @@ export async function runAgent(
   agentId: AcpAgentId,
   buildPrompt: (canSeeImages: boolean) => string,
   images: PromptImage[],
-  { timeoutMs = 240_000, signal }: { timeoutMs?: number; signal?: AbortSignal } = {},
+  { timeoutMs = 240_000, signal, onDelta }: { timeoutMs?: number; signal?: AbortSignal; onDelta?: OnDelta } = {},
 ): Promise<{ text: string; imagesSent: boolean }> {
   if (busy) throw new AgentError("BUSY", "다른 초안을 생성 중입니다. 끝난 뒤 다시 시도해 주세요.");
   const def = ACP_AGENTS[agentId];
@@ -119,6 +120,7 @@ export async function runAgent(
       const u = params.update;
       if (u.sessionUpdate === "agent_message_chunk" && u.content.type === "text" && text.length < MAX_OUTPUT_CHARS) {
         text += u.content.text;
+        onDelta?.(u.content.text);
       }
     })
     .onRequest(acp.methods.client.session.requestPermission, ({ params }) => {

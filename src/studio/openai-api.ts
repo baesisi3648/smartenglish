@@ -1,6 +1,7 @@
 import "server-only";
 import { GPT_TRIAL_UNTIL } from "./agents";
 import { AgentError } from "./errors";
+import { parseJson, sseData, type OnDelta } from "./sse";
 
 /**
  * GPT(내 API 키) / GPT 체험(서버 키, 하루 10회) — OpenAI Responses API(글) / Image API(그림).
@@ -46,19 +47,70 @@ function httpError(status: number, json: OpenAIError, what: string): AgentError 
   return new AgentError("AGENT_ERROR", "OpenAI에서 오류가 났습니다. 다시 시도해 주세요.", `HTTP ${status}: ${msg}`);
 }
 
+function netError(e: unknown, label: string, timeoutMs: number) {
+  if (e instanceof AgentError) return e;
+  if (e instanceof Error && e.name === "TimeoutError") return new AgentError("TIMEOUT", `OpenAI ${label} 응답 시간 초과`, `timeout=${timeoutMs}ms`);
+  return new AgentError("AGENT_ERROR", "OpenAI에 연결하지 못했습니다. 잠시 뒤 다시 시도해 주세요.", String(e));
+}
+
+async function send(url: string, apiKey: string, body: unknown, signal: AbortSignal) {
+  return fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify(body),
+    signal,
+  });
+}
+
 async function post<T extends OpenAIError>(url: string, apiKey: string, body: unknown, signal: AbortSignal, timeoutMs: number, label: string) {
   const ctrl = AbortSignal.any([AbortSignal.timeout(timeoutMs), signal]);
   try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify(body),
-      signal: ctrl,
-    });
+    const res = await send(url, apiKey, body, ctrl);
     return { res, json: (await res.json().catch(() => ({}))) as T };
   } catch (e) {
-    if (e instanceof Error && e.name === "TimeoutError") throw new AgentError("TIMEOUT", `OpenAI ${label} 응답 시간 초과`, `timeout=${timeoutMs}ms`);
-    throw new AgentError("AGENT_ERROR", "OpenAI에 연결하지 못했습니다. 잠시 뒤 다시 시도해 주세요.", String(e));
+    throw netError(e, label, timeoutMs);
+  }
+}
+
+function incompleteError(reason: string | undefined) {
+  return new AgentError(
+    "INCOMPLETE",
+    reason === "content_filter" ? "OpenAI 안전 기준에 걸렸습니다. 입력 내용이나 사진을 확인해 주세요." : "응답이 너무 길어 중간에 끊겼습니다. 다시 시도해 주세요.",
+    `incomplete: ${reason}`,
+  );
+}
+
+type StreamEvent = {
+  type?: string;
+  delta?: string;
+  message?: string;
+  code?: string;
+  response?: ResponsesBody & { error?: { message?: string; code?: string } };
+};
+
+/** 스트리밍: 글 조각이 올 때마다 onDelta 로 넘기고, 끝나면 전체 글을 돌려준다 */
+async function streamResponses(apiKey: string, body: Record<string, unknown>, signal: AbortSignal, timeoutMs: number, onDelta: OnDelta) {
+  const ctrl = AbortSignal.any([AbortSignal.timeout(timeoutMs), signal]);
+  let text = "";
+  try {
+    const res = await send(RESPONSES, apiKey, { ...body, stream: true }, ctrl);
+    if (!res.ok || !res.body) throw httpError(res.status, (await res.json().catch(() => ({}))) as OpenAIError, "모델");
+    for await (const data of sseData(res.body)) {
+      const ev = parseJson<StreamEvent>(data);
+      if (!ev) continue;
+      if (ev.type === "response.output_text.delta" && ev.delta) {
+        text += ev.delta;
+        onDelta(ev.delta);
+      } else if (ev.type === "response.incomplete") {
+        throw incompleteError(ev.response?.incomplete_details?.reason);
+      } else if (ev.type === "response.failed" || ev.type === "error") {
+        const err = ev.response?.error ?? { message: ev.message, code: ev.code };
+        throw httpError(500, { error: err }, "모델");
+      }
+    }
+    return text;
+  } catch (e) {
+    throw netError(e, "글", timeoutMs);
   }
 }
 
@@ -66,7 +118,13 @@ async function post<T extends OpenAIError>(url: string, apiKey: string, body: un
 export async function runOpenAI(
   prompt: string,
   images: { data: string; mimeType: string }[],
-  { apiKey, model, signal, timeoutMs = 180_000 }: { apiKey: string; model: string; signal: AbortSignal; timeoutMs?: number },
+  {
+    apiKey,
+    model,
+    signal,
+    timeoutMs = 180_000,
+    onDelta,
+  }: { apiKey: string; model: string; signal: AbortSignal; timeoutMs?: number; onDelta?: OnDelta },
 ): Promise<{ text: string; imagesSent: boolean }> {
   const content: unknown[] = [{ type: "input_text", text: prompt }];
   images.forEach((img, i) => {
@@ -74,23 +132,23 @@ export async function runOpenAI(
     content.push({ type: "input_image", image_url: `data:${img.mimeType};base64,${img.data}` });
   });
 
-  const { res, json } = await post<ResponsesBody>(
-    RESPONSES,
-    apiKey,
-    {
-      model,
-      input: [{ role: "user", content }],
-      text: { format: { type: "json_object" } },
-      // 추론 토큰 포함 상한 — 본문 + JSON 여유, 비용 상한 역할
-      max_output_tokens: 12_000,
-      // 블로그 글은 깊은 추론이 필요 없음 → 비용·시간 절약 (GPT-6 계열 기본값은 medium)
-      reasoning: { effort: "low" },
-      store: false,
-    },
-    signal,
-    timeoutMs,
-    "글",
-  );
+  const request = {
+    model,
+    input: [{ role: "user", content }],
+    text: { format: { type: "json_object" } },
+    // 추론 토큰 포함 상한 — 본문 + JSON 여유, 비용 상한 역할
+    max_output_tokens: 12_000,
+    // 블로그 글은 깊은 추론이 필요 없음 → 비용·시간 절약 (GPT-6 계열 기본값은 medium)
+    reasoning: { effort: "low" },
+    store: false,
+  };
+  if (onDelta) {
+    const text = await streamResponses(apiKey, request, signal, timeoutMs, onDelta);
+    if (!text.trim()) throw new AgentError("INCOMPLETE", "OpenAI가 빈 응답을 보냈습니다. 다시 시도해 주세요.");
+    return { text, imagesSent: images.length > 0 };
+  }
+
+  const { res, json } = await post<ResponsesBody>(RESPONSES, apiKey, request, signal, timeoutMs, "글");
   if (!res.ok) throw httpError(res.status, json, "모델");
 
   const text = (json.output ?? [])
@@ -99,14 +157,7 @@ export async function runOpenAI(
     .filter((c) => c.type === "output_text")
     .map((c) => c.text ?? "")
     .join("");
-  if (json.status === "incomplete") {
-    const reason = json.incomplete_details?.reason;
-    throw new AgentError(
-      "INCOMPLETE",
-      reason === "content_filter" ? "OpenAI 안전 기준에 걸렸습니다. 입력 내용이나 사진을 확인해 주세요." : "응답이 너무 길어 중간에 끊겼습니다. 다시 시도해 주세요.",
-      `incomplete: ${reason}`,
-    );
-  }
+  if (json.status === "incomplete") throw incompleteError(json.incomplete_details?.reason);
   if (!text.trim()) throw new AgentError("INCOMPLETE", "OpenAI가 빈 응답을 보냈습니다. 다시 시도해 주세요.");
   return { text, imagesSent: images.length > 0 };
 }

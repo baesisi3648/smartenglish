@@ -5,6 +5,7 @@ import Link from "next/link";
 import type { PostType } from "@/studio/post-types";
 import type { Plan, PlanIdea, TypeStat } from "@/studio/planner";
 import type { QuickIdea } from "@/studio/quick-ideas";
+import { fetchStream, partialField } from "@/studio/stream-client";
 import { BLOG_STYLE } from "@/studio/blog-style";
 import { figuresOf, parseBody, toEditorHtml, toPlainText, type Span } from "@/studio/format";
 import { DEFAULT_OPENAI_MODEL, MAX_AI_IMAGES, OPENAI_KEY_PATTERN, OPENAI_MODELS } from "@/studio/openai-models";
@@ -46,7 +47,9 @@ async function toDataUrl(src: string, maxSide = 1200): Promise<string | undefine
   }
 }
 
-type FigureState = { status: "loading" | "done" | "error"; src?: string; error?: string };
+/** AI 그림 상태 — [그림: 설명] 문구로 짝지음 (본문을 고쳐 순서가 바뀌어도 같은 그림이 같은 자리에) */
+type FigureState = { desc: string; status: "loading" | "done" | "error"; src?: string; error?: string };
+const figureFor = (figures: FigureState[], desc: string) => figures.find((f) => f.desc === desc);
 
 type AgentInfo = { id: string; label: string; plan: string; loginHelp: string };
 
@@ -142,6 +145,8 @@ export default function StudioClient({
   const [kwPicked, setKwPicked] = useState<string[] | null>(null);
   const [topic, setTopic] = useState("");
   const [ideaPicked, setIdeaPicked] = useState<string | null>(null);
+  /** 고른 추천 칩: 주제 칸에 그 제목이 남아 있을 때만 선택된 것으로 본다 (직접 바꾸면 해제) */
+  const pickedIdea = ideas.find((i) => i.id === ideaPicked && topic.includes(i.title));
   /** 주제 없이 바로 쓸 맞춤 추천: 원장님께 받을 사실이 없는 첫 추천 */
   const todayPick = ideas.find((i) => i.needs.length === 0);
   const [files, setFiles] = useState<File[]>([]);
@@ -151,6 +156,9 @@ export default function StudioClient({
   const [result, setResult] = useState<Result | null>(null);
   const [body, setBody] = useState("");
   const [copied, setCopied] = useState("");
+  /** 스트리밍: AI가 지금까지 쓴 제목·본문 (생성·고치기 중에만) */
+  const [live, setLive] = useState<{ title: string; body: string } | null>(null);
+  const showLive = (raw: string) => setLive({ title: partialField(raw, "title"), body: partialField(raw, "body") });
 
   const type = postTypes.find((t) => t.id === typeId)!;
   const selectedKeywords = kwPicked ?? [type.defaultKeyword];
@@ -198,8 +206,9 @@ export default function StudioClient({
   }
 
   /** 초안의 [그림: …] 자리마다 일러스트를 그린다 (동시에, 실패한 것만 다시 그리기 가능) */
-  async function drawFigure(i: number, desc: string, headers: Record<string, string>) {
-    setFigures((prev) => prev.map((f, k) => (k === i ? { status: "loading" } : f)));
+  async function drawFigure(desc: string, headers: Record<string, string>) {
+    const set = (next: FigureState) => setFigures((prev) => prev.map((f) => (f.desc === desc ? next : f)));
+    set({ desc, status: "loading" });
     try {
       const res = await fetch("/api/studio/images", {
         method: "POST",
@@ -207,14 +216,9 @@ export default function StudioClient({
         body: JSON.stringify({ description: desc }),
       });
       const json = await res.json();
-      setFigures((prev) =>
-        prev.map((f, k) =>
-          k === i ? (json.success ? { status: "done", src: json.data.image } : { status: "error", error: json.error }) : f,
-        ),
-      );
+      set(json.success ? { desc, status: "done", src: json.data.image } : { desc, status: "error", error: json.error });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "요청 실패";
-      setFigures((prev) => prev.map((f, k) => (k === i ? { status: "error", error: msg } : f)));
+      set({ desc, status: "error", error: err instanceof Error ? err.message : "요청 실패" });
     }
   }
 
@@ -235,6 +239,7 @@ export default function StudioClient({
       return;
     }
     setLoading(true);
+    setLive(null);
     setError(null);
     setResult(null);
     setFigures([]);
@@ -250,12 +255,11 @@ export default function StudioClient({
     fd.set("aiImages", isByok && aiImages ? String(MAX_AI_IMAGES) : "0");
     try {
       for (const f of await Promise.all(files.map(shrinkImage))) fd.append("images", f);
-      const res = await fetch("/api/studio/drafts", {
-        method: "POST",
-        body: fd,
-        headers: { "X-Studio-Request": "1", ...headers },
-      });
-      const json = await res.json();
+      const json = (await fetchStream(
+        "/api/studio/drafts",
+        { method: "POST", body: fd, headers: { "X-Studio-Request": "1", ...headers } },
+        showLive,
+      )) as { success: boolean; error: string; raw?: string; data: Omit<Result, "topic" | "photos"> };
       if (!json.success) {
         setError({ msg: json.error, raw: json.raw });
       } else {
@@ -264,27 +268,22 @@ export default function StudioClient({
         setHistory([]);
         setRevMsg(null);
         setBody(json.data.body);
-        const descs = isByok && aiImages ? figuresOf(json.data.body).slice(0, MAX_AI_IMAGES) : [];
-        setFigures(descs.map(() => ({ status: "loading" })));
-        descs.forEach((d, i) => drawFigure(i, d, headers));
+        const descs = isByok && aiImages ? [...new Set(figuresOf(json.data.body))].slice(0, MAX_AI_IMAGES) : [];
+        setFigures(descs.map((desc) => ({ desc, status: "loading" })));
+        descs.forEach((d) => drawFigure(d, headers));
       }
     } catch (err) {
       setError({ msg: err instanceof Error ? err.message : "요청 실패" });
     } finally {
       setLoading(false);
+      setLive(null);
     }
   }
 
-  /** 그림 상태를 [그림: 설명] 기준으로 새 본문에 맞춤 (설명이 같은 그림은 유지, 새 자리는 "다시 그리기") */
-  function remapFigures(oldBody: string, newBody: string) {
-    const oldDescs = figuresOf(oldBody);
-    const newDescs = figuresOf(newBody).slice(0, MAX_AI_IMAGES);
-    setFigures((prev) =>
-      newDescs.map((d) => {
-        const k = oldDescs.indexOf(d);
-        return k >= 0 && prev[k] ? prev[k] : { status: "error", error: "새 그림 자리예요" };
-      }),
-    );
+  /** 그림 상태를 새 본문의 [그림: 설명]에 맞춤 (설명이 같은 그림은 유지, 새 자리는 "다시 그리기") */
+  function remapFigures(newBody: string) {
+    const newDescs = [...new Set(figuresOf(newBody))].slice(0, MAX_AI_IMAGES);
+    setFigures((prev) => newDescs.map((d) => figureFor(prev, d) ?? { desc: d, status: "error", error: "새 그림 자리예요" }));
   }
 
   async function revise(instruction: string) {
@@ -295,26 +294,30 @@ export default function StudioClient({
     }
     setRevising(true);
     setRevMsg(null);
+    setLive(null);
     try {
-      const res = await fetch("/api/studio/revise", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Studio-Request": "1", ...byokHeaders },
-        body: JSON.stringify({
-          agent,
-          title: result.title,
-          body,
-          instruction,
-          topic: result.topic,
-          keyword: result.keywords[0] ?? "",
-        }),
-      });
-      const json = await res.json();
+      const json = (await fetchStream(
+        "/api/studio/revise",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Studio-Request": "1", ...byokHeaders },
+          body: JSON.stringify({
+            agent,
+            title: result.title,
+            body,
+            instruction,
+            topic: result.topic,
+            keyword: result.keywords[0] ?? "",
+          }),
+        },
+        showLive,
+      )) as { success: boolean; error: string; data: { title: string; body: string; notes: string } };
       if (!json.success) {
         setRevMsg({ ok: false, text: json.error });
         return;
       }
       setHistory((h) => [...h, { title: result.title, body }]);
-      if (figures.length > 0) remapFigures(body, json.data.body);
+      if (figures.length > 0) remapFigures(json.data.body);
       setResult({ ...result, title: json.data.title });
       setBody(json.data.body);
       setRevText("");
@@ -323,13 +326,14 @@ export default function StudioClient({
       setRevMsg({ ok: false, text: err instanceof Error ? err.message : "요청 실패" });
     } finally {
       setRevising(false);
+      setLive(null);
     }
   }
 
   function undo() {
     const last = history.at(-1);
     if (!last || !result) return;
-    if (figures.length > 0) remapFigures(body, last.body);
+    if (figures.length > 0) remapFigures(last.body);
     setHistory((h) => h.slice(0, -1));
     setResult({ ...result, title: last.title });
     setBody(last.body);
@@ -352,7 +356,10 @@ export default function StudioClient({
     setCopied("에디터-준비");
     try {
       const photos = await Promise.all(result.photos.map((p) => toDataUrl(p)));
-      const figs = figures.map((f) => (f.status === "done" ? f.src : undefined));
+      const figs = figuresOf(body).map((d) => {
+        const f = figureFor(figures, d);
+        return f?.status === "done" ? f.src : undefined;
+      });
       const html = toEditorHtml(body, { photos, figures: figs, center });
       await navigator.clipboard.write([
         new ClipboardItem({
@@ -548,13 +555,13 @@ export default function StudioClient({
                       <button
                         key={idea.id}
                         type="button"
-                        aria-pressed={ideaPicked === idea.id}
+                        aria-pressed={pickedIdea?.id === idea.id}
                         onClick={() => {
                           setIdeaPicked(idea.id);
                           applyIdea(idea);
                         }}
                         className={`rounded-full border px-3 py-1.5 text-left text-[13px] font-bold transition ${
-                          ideaPicked === idea.id
+                          pickedIdea?.id === idea.id
                             ? "border-hb-navy bg-hb-navy text-white"
                             : "border-line bg-white text-ink hover:border-hb-blue"
                         }`}
@@ -564,7 +571,7 @@ export default function StudioClient({
                     ))}
                   </div>
                   {(() => {
-                    const cur = ideas.find((i) => i.id === ideaPicked);
+                    const cur = pickedIdea;
                     return (
                       <p className="mt-2 text-xs leading-5 text-ink-soft">
                         {cur
@@ -679,7 +686,22 @@ export default function StudioClient({
 
         {/* ── 결과 ── */}
         <section id="result" className="scroll-mt-4 lg:sticky lg:top-4 lg:self-start">
-          {!result && !error && (
+          {loading && !result && (
+            <div className="space-y-2" aria-live="polite">
+              <p className="rounded-xl bg-hb-navy px-4 py-2 text-xs font-bold text-white">
+                ✍️ {selectedAgent.label}가 쓰는 중…{" "}
+                {live?.body ? `${live.body.replace(/\*\*/g, "").length}자` : "글 구성을 준비하고 있어요"}
+              </p>
+              {live?.body ? (
+                <Preview title={live.title} body={live.body} photos={[]} figures={[]} center={center} view={view} />
+              ) : (
+                <div className="grid min-h-60 place-items-center rounded-2xl bg-white p-8 text-sm text-ink-soft ring-1 ring-line">
+                  <span className="animate-pulse">곧 글이 나타납니다…</span>
+                </div>
+              )}
+            </div>
+          )}
+          {!result && !error && !loading && (
             <div className="grid min-h-80 place-items-center rounded-2xl border-2 border-dashed border-line bg-white p-8 text-center text-sm text-ink-soft">
               왼쪽을 채우고 &lsquo;초안 만들기&rsquo;를 누르면
               <br />
@@ -758,7 +780,19 @@ export default function StudioClient({
                         ))}
                       </div>
                     </div>
-                    <Preview title={result.title} body={body} photos={result.photos} figures={figures} center={center} view={view} />
+                    {revising && (
+                      <p className="mb-2 rounded-lg bg-hb-blue px-3 py-1.5 text-xs font-bold text-white" aria-live="polite">
+                        ✏️ 고치는 중… {live?.body ? "고친 글이 아래에 나타나고 있어요" : "요청을 읽고 있어요"}
+                      </p>
+                    )}
+                    <Preview
+                      title={revising && live?.title ? live.title : result.title}
+                      body={revising && live?.body ? live.body : body}
+                      photos={result.photos}
+                      figures={figures}
+                      center={center}
+                      view={view}
+                    />
                   </>
                 )}
                 <div className="mt-4 space-y-2">
@@ -860,8 +894,8 @@ export default function StudioClient({
                 <div className="rounded-xl bg-white p-4 ring-1 ring-line">
                   <p className="mb-2 text-sm font-bold">🎨 AI 그림</p>
                   <div className="grid grid-cols-2 gap-3">
-                    {figures.map((f, i) => {
-                      const desc = figuresOf(body)[i] ?? "";
+                    {[...new Set(figuresOf(body))].slice(0, MAX_AI_IMAGES).map((desc, i) => {
+                      const f: FigureState = figureFor(figures, desc) ?? { desc, status: "error", error: "새 그림 자리예요" };
                       return (
                         <figure key={i} className="text-xs">
                           {f.status === "done" ? (
@@ -879,7 +913,14 @@ export default function StudioClient({
                                 저장
                               </a>
                             ) : f.status === "error" && desc ? (
-                              <button type="button" onClick={() => drawFigure(i, desc, byokHeaders)} className="text-hb-navy underline">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (!figureFor(figures, desc)) setFigures((prev) => [...prev, { desc, status: "loading" }]);
+                                  drawFigure(desc, byokHeaders);
+                                }}
+                                className="text-hb-navy underline"
+                              >
                                 다시 그리기
                               </button>
                             ) : null}
@@ -1297,7 +1338,8 @@ function Preview({
       <article
         className="mx-auto bg-white shadow-sm ring-1 ring-black/5"
         style={{
-          maxWidth: view === "mobile" ? 375 : 693,
+          // PC는 스마트에디터 본문 폭 그대로(좁은 화면에서는 가로 스크롤), 모바일은 최대 375px
+          ...(view === "mobile" ? { maxWidth: 375 } : { width: 693 + 64, minWidth: 693 + 64 }),
           fontFamily: '-apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif',
         }}
       >
@@ -1340,7 +1382,7 @@ function Preview({
                 );
               }
               case "figure": {
-                const f = figures[b.n - 1];
+                const f = figureFor(figures, b.desc);
                 return f?.status === "done" ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img key={i} src={f.src} alt={b.desc} className="my-3 inline-block w-full" />

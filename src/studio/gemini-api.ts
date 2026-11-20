@@ -1,5 +1,6 @@
 import "server-only";
 import { AgentError } from "./errors";
+import { parseJson, sseData, type OnDelta } from "./sse";
 
 /**
  * Gemini API(REST) 호출 — 웹 데모용.
@@ -28,7 +29,7 @@ type GeminiResponse = {
 export async function runGemini(
   prompt: string,
   images: { data: string; mimeType: string }[],
-  { timeoutMs = 120_000, signal }: { timeoutMs?: number; signal?: AbortSignal } = {},
+  { timeoutMs = 120_000, signal, onDelta }: { timeoutMs?: number; signal?: AbortSignal; onDelta?: OnDelta } = {},
 ): Promise<{ text: string; imagesSent: boolean }> {
   const parts: Part[] = [{ text: prompt }];
   images.forEach((img, i) => {
@@ -39,7 +40,11 @@ export async function runGemini(
   const ctrl = AbortSignal.any([AbortSignal.timeout(timeoutMs), ...(signal ? [signal] : [])]);
   const call = async () => {
     try {
-      return await fetch(`${ENDPOINT}/${geminiModel()}:generateContent`, {
+      // onDelta 가 있으면 스트리밍(SSE)으로 받아 쓰는 대로 화면에 보낸다
+      const url = onDelta
+        ? `${ENDPOINT}/${geminiModel()}:streamGenerateContent?alt=sse`
+        : `${ENDPOINT}/${geminiModel()}:generateContent`;
+      return await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-goog-api-key": process.env.GEMINI_API_KEY ?? "" },
         body: JSON.stringify({
@@ -62,7 +67,7 @@ export async function runGemini(
     res = await call();
   }
 
-  const json = (await res.json().catch(() => ({}))) as GeminiResponse;
+  const json = res.ok && onDelta && res.body ? await readStream(res.body, onDelta, timeoutMs) : ((await res.json().catch(() => ({}))) as GeminiResponse);
   if (!res.ok) {
     const msg = json.error?.message ?? `HTTP ${res.status}`;
     if (res.status === 503) {
@@ -97,4 +102,41 @@ export async function runGemini(
   }
   if (!text.trim()) throw new AgentError("INCOMPLETE", "Gemini가 빈 응답을 보냈습니다. 다시 시도해 주세요.");
   return { text, imagesSent: images.length > 0 };
+}
+
+/** 스트리밍 조각들을 하나의 응답 모양으로 합친다 (글은 이어 붙이고, 끝난 이유·차단 사유는 마지막 값) */
+async function readStream(body: ReadableStream<Uint8Array>, onDelta: OnDelta, timeoutMs: number): Promise<GeminiResponse> {
+  let text = "";
+  let finishReason: string | undefined;
+  let blockReason: string | undefined;
+  try {
+    for await (const data of sseData(body)) {
+      const chunk = parseJson<GeminiResponse>(data);
+      if (!chunk) continue;
+      if (chunk.error) {
+        const status = chunk.error.status ?? "";
+        if (status === "UNAVAILABLE") throw new AgentError("AGENT_ERROR", "지금 Gemini 서버가 붐빕니다 (Google 쪽 일시 과부하). 1~2분 뒤 다시 시도하거나 다른 AI를 골라 주세요.", chunk.error.message);
+        throw new AgentError("AGENT_ERROR", "Gemini에서 오류가 났습니다. 다시 시도해 주세요.", `${status}: ${chunk.error.message ?? ""}`);
+      }
+      blockReason = chunk.promptFeedback?.blockReason ?? blockReason;
+      const cand = chunk.candidates?.[0];
+      finishReason = cand?.finishReason ?? finishReason;
+      const piece = (cand?.content?.parts ?? [])
+        .filter((p) => !p.thought)
+        .map((p) => p.text ?? "")
+        .join("");
+      if (piece) {
+        text += piece;
+        onDelta(piece);
+      }
+    }
+  } catch (e) {
+    if (e instanceof AgentError) throw e;
+    if (e instanceof Error && e.name === "TimeoutError") throw new AgentError("TIMEOUT", "Gemini 응답 시간 초과", `model=${geminiModel()} timeout=${timeoutMs}ms`);
+    throw new AgentError("AGENT_ERROR", "Gemini 응답을 받는 중 연결이 끊겼습니다. 다시 시도해 주세요.", String(e));
+  }
+  return {
+    candidates: [{ content: { parts: [{ text }] }, finishReason }],
+    ...(blockReason ? { promptFeedback: { blockReason } } : {}),
+  };
 }
