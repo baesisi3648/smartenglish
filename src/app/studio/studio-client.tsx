@@ -494,7 +494,14 @@ export default function StudioClient({
         </div>
       </header>
 
-      <div className="mx-auto grid max-w-6xl gap-6 px-4 py-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+      {/* PC 미리보기를 고르면 결과 칸을 블로그 PC 본문 폭(약 800px)만큼 넓힌다 */}
+      <div
+        className={`mx-auto grid gap-6 px-4 py-6 ${
+          view === "pc"
+            ? "max-w-[1440px] lg:grid-cols-[minmax(0,1fr)_minmax(0,820px)]"
+            : "max-w-6xl lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]"
+        }`}
+      >
         {/* ── 입력 ── */}
         <form onSubmit={generate}>
           {/* 생성 중에는 입력을 잠가 사진 순서와 [사진N] 마커가 어긋나지 않게 함 */}
@@ -1505,7 +1512,7 @@ function Preview({
 }) {
   const S = BLOG_STYLE;
   return (
-    <div className="max-h-[40rem] overflow-auto rounded-lg bg-[#f5f6f8] p-3">
+    <div className={`overflow-auto rounded-lg bg-[#f5f6f8] p-3 ${view === "pc" ? "max-h-[80vh]" : "max-h-[40rem]"}`}>
       <article
         className="mx-auto bg-white shadow-sm ring-1 ring-black/5"
         style={{
