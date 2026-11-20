@@ -5,7 +5,8 @@ import Link from "next/link";
 import type { PostType } from "@/studio/post-types";
 import type { Plan, PlanIdea, TypeStat } from "@/studio/planner";
 import type { QuickIdea } from "@/studio/quick-ideas";
-import { figuresOf, parseBody, toEditorHtml, toPlainText } from "@/studio/format";
+import { BLOG_STYLE } from "@/studio/blog-style";
+import { figuresOf, parseBody, toEditorHtml, toPlainText, type Span } from "@/studio/format";
 import { DEFAULT_OPENAI_MODEL, MAX_AI_IMAGES, OPENAI_KEY_PATTERN, OPENAI_MODELS } from "@/studio/openai-models";
 
 const noopSubscribe = () => () => {};
@@ -130,6 +131,7 @@ export default function StudioClient({
   const [figures, setFigures] = useState<FigureState[]>([]);
   const [editText, setEditText] = useState(false);
   const [center, setCenter] = useState(true); // 기본: 가운데 정렬
+  const [view, setView] = useState<"mobile" | "pc">("mobile"); // 미리보기 폭 (블로그 방문자 대부분 모바일)
   // 자연어 수정: 요청 → AI가 해당 부분만 고침. history 로 한 단계씩 되돌리기
   const [revText, setRevText] = useState("");
   const [revising, setRevising] = useState(false);
@@ -734,12 +736,30 @@ export default function StudioClient({
                       className="h-[30rem] w-full resize-y rounded-lg border border-line p-3 text-[14px] leading-6"
                     />
                     <p className="mt-1 text-xs text-ink-soft">
-                      <code>## </code> 소제목 · <code>&gt; </code> 인용 · <code>[사진N]</code> <code>[그림: …]</code> 이미지
-                      자리
+                      <code>## </code> 소제목 · <code>&gt; </code> 인용 · <code>**키워드**</code> 강조색 · <code>[사진N]</code>{" "}
+                      <code>[그림: …]</code> 이미지 자리
                     </p>
                   </>
                 ) : (
-                  <Preview body={body} photos={result.photos} figures={figures} center={center} />
+                  <>
+                    <div className="mb-2 flex items-center justify-between text-xs">
+                      <p className="text-ink-soft">네이버 블로그에 올렸을 때 모습</p>
+                      <div className="flex gap-1 rounded-full bg-bg-soft p-0.5 font-bold">
+                        {(["mobile", "pc"] as const).map((v) => (
+                          <button
+                            key={v}
+                            type="button"
+                            aria-pressed={view === v}
+                            onClick={() => setView(v)}
+                            className={`rounded-full px-2.5 py-0.5 ${view === v ? "bg-white text-hb-navy shadow" : "text-ink-soft"}`}
+                          >
+                            {v === "mobile" ? "📱 모바일" : "💻 PC"}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <Preview title={result.title} body={body} photos={result.photos} figures={figures} center={center} view={view} />
+                  </>
                 )}
                 <div className="mt-4 space-y-2">
                   <button
@@ -1231,64 +1251,123 @@ function Planner({
   );
 }
 
-/** 본문 미리보기: 서식 표시를 실제 모양(굵은 소제목·인용·사진·그림)으로 */
+/** 핵심 키워드(**…**)를 블로그처럼 굵은 강조색으로 */
+function Spans({ spans, strong }: { spans: Span[]; strong?: string }) {
+  return (
+    <>
+      {spans.map((s, k) =>
+        s.key ? (
+          <b key={k} style={{ color: BLOG_STYLE.keywordColor }}>
+            {s.text}
+          </b>
+        ) : strong ? (
+          <b key={k} style={{ color: strong }}>
+            {s.text}
+          </b>
+        ) : (
+          <span key={k}>{s.text}</span>
+        ),
+      )}
+    </>
+  );
+}
+
+/**
+ * 네이버 블로그처럼 보이는 미리보기: 원장님 블로그 실제 서식(blog-style.ts)과 같은 글꼴 크기·색·정렬,
+ * 모바일(375px)·PC(693px, 스마트에디터 본문 폭) 두 가지 폭.
+ */
 function Preview({
+  title,
   body,
   photos,
   figures,
   center,
+  view,
 }: {
+  title: string;
   body: string;
   photos: string[];
   figures: FigureState[];
   center: boolean;
+  view: "mobile" | "pc";
 }) {
+  const S = BLOG_STYLE;
   return (
-    <div
-      className={`max-h-[34rem] overflow-auto rounded-lg border border-line p-4 text-[15px] leading-7 ${center ? "text-center" : ""}`}
-    >
-      {parseBody(body).map((b, i) => {
-        switch (b.kind) {
-          case "blank":
-            return <div key={i} className="h-4" />;
-          case "heading":
-            return (
-              <p key={i} className="mt-1 text-[17px] font-extrabold text-hb-navy">
-                {b.text}
-              </p>
-            );
-          case "quote":
-            return (
-              <p key={i} className="text-ink-soft">
-                {b.text}
-              </p>
-            );
-          case "photo": {
-            const src = photos[b.n - 1];
-            return src ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img key={i} src={src} alt={`사진${b.n}`} className="my-2 inline-block max-h-72 rounded" />
-            ) : (
-              <p key={i} className="my-1 rounded bg-bg-soft py-2 text-center text-xs font-bold text-ink-soft">
-                [사진{b.n}]
-              </p>
-            );
-          }
-          case "figure": {
-            const f = figures[b.n - 1];
-            return f?.status === "done" ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img key={i} src={f.src} alt={b.desc} className="my-2 inline-block max-h-72 rounded" />
-            ) : (
-              <p key={i} className="my-1 rounded border border-dashed border-hb-blue py-2 text-center text-xs text-hb-blue">
-                🎨 그림{b.n} {f?.status === "loading" ? "그리는 중…" : ""} — {b.desc}
-              </p>
-            );
-          }
-          default:
-            return <p key={i}>{b.text}</p>;
-        }
-      })}
+    <div className="max-h-[40rem] overflow-auto rounded-lg bg-[#f5f6f8] p-3">
+      <article
+        className="mx-auto bg-white shadow-sm ring-1 ring-black/5"
+        style={{
+          maxWidth: view === "mobile" ? 375 : 693,
+          fontFamily: '-apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif',
+        }}
+      >
+        <header className={`border-b border-[#ebebeb] ${view === "mobile" ? "px-4 pb-4 pt-5" : "px-8 pb-6 pt-8"}`}>
+          <p className="text-[13px] text-[#00c73c]">스마트해법영어 백운밸리점</p>
+          <h3 className={`mt-2 font-bold leading-snug text-[#222] ${view === "mobile" ? "text-[20px]" : "text-[26px]"}`}>
+            {title || "제목"}
+          </h3>
+          <p className="mt-3 text-[12px] text-[#999]">sukjoon331 · 방금 전</p>
+        </header>
+        <div
+          className={view === "mobile" ? "px-4 py-6" : "px-8 py-8"}
+          style={{ fontSize: S.fontSize, lineHeight: S.lineHeight, color: S.bodyColor, textAlign: center ? "center" : "left" }}
+        >
+          {parseBody(body).map((b, i) => {
+            switch (b.kind) {
+              case "blank":
+                return <div key={i} style={{ height: `${S.lineHeight}em` }} />;
+              case "heading":
+                return (
+                  <p key={i}>
+                    <b style={{ color: S.headingColor }}>{b.text}</b>
+                  </p>
+                );
+              case "quote":
+                return (
+                  <p key={i}>
+                    <Spans spans={b.spans} strong={S.strongColor} />
+                  </p>
+                );
+              case "photo": {
+                const src = photos[b.n - 1];
+                return src ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img key={i} src={src} alt={`사진${b.n}`} className="my-3 inline-block w-full" />
+                ) : (
+                  <p key={i} className="my-2 rounded bg-bg-soft py-6 text-center text-xs font-bold text-ink-soft">
+                    [사진{b.n}] 자리
+                  </p>
+                );
+              }
+              case "figure": {
+                const f = figures[b.n - 1];
+                return f?.status === "done" ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img key={i} src={f.src} alt={b.desc} className="my-3 inline-block w-full" />
+                ) : (
+                  <p key={i} className="my-2 rounded border border-dashed border-hb-blue py-4 text-center text-xs text-hb-blue">
+                    🎨 그림{b.n} {f?.status === "loading" ? "그리는 중…" : ""} — {b.desc}
+                  </p>
+                );
+              }
+              default:
+                if (b.role === "greeting-name") {
+                  return (
+                    <p key={i}>
+                      <b style={{ color: S.nameColor }}>스마트해법영어 백운밸리점</b>
+                      {b.text.replace(/^스마트해법영어 백운밸리점/, "")}
+                    </p>
+                  );
+                }
+                return (
+                  <p key={i}>
+                    <Spans spans={b.spans} strong={b.role ? S.strongColor : undefined} />
+                  </p>
+                );
+            }
+          })}
+        </div>
+      </article>
     </div>
   );
 }
