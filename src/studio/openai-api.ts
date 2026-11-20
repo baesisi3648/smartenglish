@@ -50,6 +50,7 @@ function httpError(status: number, json: OpenAIError, what: string): AgentError 
 function netError(e: unknown, label: string, timeoutMs: number) {
   if (e instanceof AgentError) return e;
   if (e instanceof Error && e.name === "TimeoutError") return new AgentError("TIMEOUT", `OpenAI ${label} 응답 시간 초과`, `timeout=${timeoutMs}ms`);
+  if (e instanceof Error && e.name === "AbortError") return new AgentError("AGENT_ERROR", "요청이 취소되었습니다.");
   return new AgentError("AGENT_ERROR", "OpenAI에 연결하지 못했습니다. 잠시 뒤 다시 시도해 주세요.", String(e));
 }
 
@@ -92,6 +93,7 @@ type StreamEvent = {
 async function streamResponses(apiKey: string, body: Record<string, unknown>, signal: AbortSignal, timeoutMs: number, onDelta: OnDelta) {
   const ctrl = AbortSignal.any([AbortSignal.timeout(timeoutMs), signal]);
   let text = "";
+  let completed = false;
   try {
     const res = await send(RESPONSES, apiKey, { ...body, stream: true }, ctrl);
     if (!res.ok || !res.body) throw httpError(res.status, (await res.json().catch(() => ({}))) as OpenAIError, "모델");
@@ -101,6 +103,9 @@ async function streamResponses(apiKey: string, body: Record<string, unknown>, si
       if (ev.type === "response.output_text.delta" && ev.delta) {
         text += ev.delta;
         onDelta(ev.delta);
+      } else if (ev.type === "response.completed") {
+        completed = true;
+        break; // 정상 완료 확정 → 더 읽지 않음
       } else if (ev.type === "response.incomplete") {
         throw incompleteError(ev.response?.incomplete_details?.reason);
       } else if (ev.type === "response.failed" || ev.type === "error") {
@@ -108,6 +113,8 @@ async function streamResponses(apiKey: string, body: Record<string, unknown>, si
         throw httpError(500, { error: err }, "모델");
       }
     }
+    // 완료 신호 없이 연결이 닫히면 글이 잘렸을 수 있음
+    if (!completed) throw new AgentError("INCOMPLETE", "응답이 중간에 끊겼습니다. 다시 시도해 주세요.", "stream ended without response.completed");
     return text;
   } catch (e) {
     throw netError(e, "글", timeoutMs);

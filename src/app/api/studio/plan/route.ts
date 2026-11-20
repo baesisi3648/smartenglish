@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { getLatestPosts } from "@/lib/blog";
 import { PLANNER_OPENAI_MODEL } from "@/studio/openai-models";
 import { analyzePosts, buildPlanPrompt, parsePlan, todayKst, upcomingSeasons } from "@/studio/planner";
-import { checkQuota, checkStudioRequest, errorResponse, fail, resolveAgent, runModel } from "@/studio/request";
+import { checkQuota, checkStudioRequest, errorResponse, fail, redactDeep, refundIfTrial, resolveAgent, runModel } from "@/studio/request";
 
 export const maxDuration = 300;
 
@@ -44,13 +44,15 @@ export async function POST(req: NextRequest) {
     // GPT: 플래너는 여러 자료를 엮어 판단해야 해서 Terra 고정 (초안은 화면에서 고른 모델)
     const planner = agent.byok ? { ...agent, byok: { ...agent.byok, model: PLANNER_OPENAI_MODEL } } : agent;
     const run = await runModel(planner, () => prompt, [], req.signal);
-    const plan = parsePlan(run.text);
-    if (!plan) {
+    const parsed = parsePlan(run.text);
+    if (!parsed) {
+      refundIfTrial(agent);
       return NextResponse.json(
-        { success: false, code: "PARSE_FAILED", error: "AI 응답을 해석하지 못했습니다. 다시 시도해 주세요.", raw: run.text.slice(0, 4000) },
+        { success: false, code: "PARSE_FAILED", error: "AI 응답을 해석하지 못했습니다. 다시 시도해 주세요." },
         { status: 502 },
       );
     }
+    const plan = redactDeep(parsed); // JSON 이스케이프로 숨긴 비밀값까지 가림
     return NextResponse.json({ success: true, data: { ...plan, context, agent: def.id } });
   } catch (e) {
     return errorResponse(e);

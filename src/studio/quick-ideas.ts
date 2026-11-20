@@ -213,7 +213,7 @@ const EVERGREEN: Record<string, Seed[]> = {
       outline: ["잔소리보다 관심", "칭찬으로 이어 가는 습관", "교습소와 함께 확인하는 학습"],
       needs: [],
       keywords: ["초등 영어", "의왕 영어"],
-      dup: /집에서|부모님이/,
+      dup: /집에서.*(영어|공부)|부모님이.*(도와|챙)/,
     },
     {
       id: "one-on-one",

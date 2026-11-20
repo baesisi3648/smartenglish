@@ -49,6 +49,17 @@ function stripMarks(s: string) {
 const THANKS = /^"\s*감사합니다\s*"$/;
 
 /**
+ * 시스템이 붙인 끝인사 블록의 시작 줄: 마지막 "감사합니다" 줄 중 뒤 6줄 안에 📞 연락처가 있는 것.
+ * (본문 중간에 같은 문구가 있거나 원장님이 연락처를 지운 경우를 끝인사로 오인하지 않게)
+ */
+export function outroStart(lines: string[]): number {
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (THANKS.test(lines[i].trim()) && lines.slice(i + 1, i + 7).some((l) => l.trim().startsWith("📞"))) return i;
+  }
+  return -1;
+}
+
+/**
  * 인사말·끝인사·연락처 줄 (template.ts 가 붙이는 고정 문구) — 블로그처럼 굵게.
  * 본문 중간의 비슷한 줄(📍 학습 포인트 등)은 건드리지 않도록 위치로 판단한다:
  * 교습소 이름은 맨 앞 두 줄 안, 연락처는 마지막 "감사합니다" 뒤에서만.
@@ -66,7 +77,7 @@ const unwrap = (line: string) => line.replace(/^\*\*\s*(\[[^\]]+\])\s*\*\*$/, "$
 export function parseBody(body: string): Block[] {
   let fig = 0;
   const lines = body.split("\n");
-  const outroFrom = lines.findLastIndex((l) => THANKS.test(l.trim()));
+  const outroFrom = outroStart(lines);
   return lines.map((raw, i): Block => {
     const line = unwrap(raw.trim());
     if (!line) return { kind: "blank" };

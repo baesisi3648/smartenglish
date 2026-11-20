@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import type { PostType } from "@/studio/post-types";
 import type { Plan, PlanIdea, TypeStat } from "@/studio/planner";
 import type { QuickIdea } from "@/studio/quick-ideas";
-import { fetchStream, partialField } from "@/studio/stream-client";
+import { fetchStream, type LiveFields } from "@/studio/stream-client";
 import { BLOG_STYLE } from "@/studio/blog-style";
 import { changedLines, figuresOf, parseBody, toEditorHtml, toPlainText, type Span } from "@/studio/format";
 import { DEFAULT_OPENAI_MODEL, MAX_AI_IMAGES, OPENAI_KEY_PATTERN, OPENAI_MODELS } from "@/studio/openai-models";
@@ -93,6 +93,8 @@ type Result = {
   topic: string;
   /** 자동 글(원장님 입력 없이 작성) 여부 */
   auto?: boolean;
+  /** AI 그림을 넣기로 하고 만든 글 (그림 패널 표시) */
+  aiFigures?: boolean;
 };
 
 /** 수정 요청 빠른 버튼 */
@@ -141,14 +143,14 @@ export default function StudioClient({
   const [revMsg, setRevMsg] = useState<{ ok: boolean; text: string; changes?: string[] } | null>(null);
   /** 마지막 글 고치기에서 바뀐 줄 (미리보기에 노란 표시). 직접 고치거나 새 글을 만들면 지움 */
   const [changed, setChanged] = useState<Set<number> | null>(null);
-  const [history, setHistory] = useState<{ title: string; body: string }[]>([]);
+  const [history, setHistory] = useState<{ title: string; body: string; figures: FigureState[] }[]>([]);
   const [typeId, setTypeId] = useState(postTypes[0].id);
   // null = 아직 고르지 않음 → 글 유형의 기본 키워드 사용
   const [kwPicked, setKwPicked] = useState<string[] | null>(null);
   const [topic, setTopic] = useState("");
   const [ideaPicked, setIdeaPicked] = useState<string | null>(null);
   /** 고른 추천 칩: 주제 칸에 그 제목이 남아 있을 때만 선택된 것으로 본다 (직접 바꾸면 해제) */
-  const pickedIdea = ideas.find((i) => i.id === ideaPicked && topic.includes(i.title));
+  const pickedIdea = ideas.find((i) => i.id === ideaPicked && topic.split("\n")[0].trim() === i.title);
   /** 주제 없이 바로 쓸 맞춤 추천: 원장님께 받을 사실이 없는 첫 추천 */
   const todayPick = ideas.find((i) => i.needs.length === 0);
   const [files, setFiles] = useState<File[]>([]);
@@ -159,8 +161,20 @@ export default function StudioClient({
   const [body, setBody] = useState("");
   const [copied, setCopied] = useState("");
   /** 스트리밍: AI가 지금까지 쓴 제목·본문 (생성·고치기 중에만) */
-  const [live, setLive] = useState<{ title: string; body: string } | null>(null);
-  const showLive = (raw: string) => setLive({ title: partialField(raw, "title"), body: partialField(raw, "body") });
+  const [live, setLive] = useState<LiveFields | null>(null);
+  // 요청 순번·취소: 늦게 온 이전 응답이 새 글을 덮어쓰지 않게, 새 요청·화면 이탈 시 이전 요청은 취소
+  const runId = useRef(0);
+  const inFlight = useRef<AbortController | null>(null);
+  const draftSeq = useRef(0); // 그림 요청이 어느 초안 것인지
+  useEffect(() => () => inFlight.current?.abort(), []);
+  function startRun() {
+    inFlight.current?.abort();
+    const ctrl = new AbortController();
+    inFlight.current = ctrl;
+    return { id: ++runId.current, signal: ctrl.signal };
+  }
+  const isCurrent = (id: number) => runId.current === id;
+  const busy = loading || revising;
 
   const type = postTypes.find((t) => t.id === typeId)!;
   const selectedKeywords = kwPicked ?? [type.defaultKeyword];
@@ -208,8 +222,11 @@ export default function StudioClient({
   }
 
   /** 초안의 [그림: …] 자리마다 일러스트를 그린다 (동시에, 실패한 것만 다시 그리기 가능) */
-  async function drawFigure(desc: string, headers: Record<string, string>) {
-    const set = (next: FigureState) => setFigures((prev) => prev.map((f) => (f.desc === desc ? next : f)));
+  async function drawFigure(desc: string, headers: Record<string, string>, seq = draftSeq.current) {
+    // 그사이 새 초안을 만들었으면 이전 초안의 그림은 버린다
+    const set = (next: FigureState) => {
+      if (draftSeq.current === seq) setFigures((prev) => prev.map((f) => (f.desc === desc ? next : f)));
+    };
     set({ desc, status: "loading" });
     try {
       const res = await fetch("/api/studio/images", {
@@ -236,6 +253,7 @@ export default function StudioClient({
   }
 
   async function runDraft(req: { mode: "manual" | "auto"; type: string; topic: string; keywords: string[] }) {
+    if (busy) return;
     if (isByok && !keyOk) {
       setError({ msg: "OpenAI API 키(sk-로 시작)를 1번 칸에 입력해 주세요." });
       return;
@@ -247,6 +265,7 @@ export default function StudioClient({
     setResult(null);
     setFigures([]);
     setEditText(false);
+    const run = startRun();
     const headers = byokHeaders; // 생성 도중 키를 바꿔도 그림은 같은 키로
     const fd = new FormData();
     fd.set("agent", agent);
@@ -260,26 +279,36 @@ export default function StudioClient({
       for (const f of await Promise.all(files.map(shrinkImage))) fd.append("images", f);
       const json = (await fetchStream(
         "/api/studio/drafts",
-        { method: "POST", body: fd, headers: { "X-Studio-Request": "1", ...headers } },
-        showLive,
-      )) as { success: boolean; error: string; raw?: string; data: Omit<Result, "topic" | "photos"> };
+        { method: "POST", body: fd, headers: { "X-Studio-Request": "1", ...headers }, signal: run.signal },
+        (l) => isCurrent(run.id) && setLive(l),
+      )) as { success: boolean; error: string; data: Omit<Result, "topic" | "photos"> };
+      if (!isCurrent(run.id)) return;
       if (!json.success) {
-        setError({ msg: json.error, raw: json.raw });
+        setError({ msg: json.error });
       } else {
+        const withFigures = isByok && aiImages;
+        const descs = withFigures ? [...new Set(figuresOf(json.data.body))].slice(0, MAX_AI_IMAGES) : [];
         // 제출 당시 사진 순서를 결과와 함께 고정 ([사진N] 마커와 일치)
-        setResult({ ...json.data, topic: req.topic, photos: files.map((f) => URL.createObjectURL(f)) });
+        setResult({
+          ...json.data,
+          topic: req.topic,
+          photos: files.map((f) => URL.createObjectURL(f)),
+          aiFigures: withFigures,
+        });
         setHistory([]);
         setRevMsg(null);
         setBody(json.data.body);
-        const descs = isByok && aiImages ? [...new Set(figuresOf(json.data.body))].slice(0, MAX_AI_IMAGES) : [];
+        const seq = ++draftSeq.current;
         setFigures(descs.map((desc) => ({ desc, status: "loading" })));
-        descs.forEach((d) => drawFigure(d, headers));
+        descs.forEach((d) => drawFigure(d, headers, seq));
       }
     } catch (err) {
-      setError({ msg: err instanceof Error ? err.message : "요청 실패" });
+      if (isCurrent(run.id) && !run.signal.aborted) setError({ msg: err instanceof Error ? err.message : "요청 실패" });
     } finally {
-      setLoading(false);
-      setLive(null);
+      if (isCurrent(run.id)) {
+        setLoading(false);
+        setLive(null);
+      }
     }
   }
 
@@ -290,7 +319,7 @@ export default function StudioClient({
   }
 
   async function revise(instruction: string) {
-    if (!result || !instruction.trim()) return;
+    if (!result || !instruction.trim() || busy) return;
     if (isByok && !keyOk) {
       setRevMsg({ ok: false, text: "OpenAI API 키를 1번 칸에 입력해 주세요." });
       return;
@@ -298,6 +327,8 @@ export default function StudioClient({
     setRevising(true);
     setRevMsg(null);
     setLive(null);
+    const run = startRun();
+    const before = { title: result.title, body, figures };
     try {
       const json = (await fetchStream(
         "/api/studio/revise",
@@ -312,40 +343,44 @@ export default function StudioClient({
             topic: result.topic,
             keyword: result.keywords[0] ?? "",
           }),
+          signal: run.signal,
         },
-        showLive,
+        (l) => isCurrent(run.id) && setLive(l),
       )) as {
         success: boolean;
         error: string;
         data: { title: string; body: string; notes: string; changes: string[]; unchanged: boolean };
       };
+      if (!isCurrent(run.id)) return;
       if (!json.success) {
         setRevMsg({ ok: false, text: json.error });
         return;
       }
-      setHistory((h) => [...h, { title: result.title, body }]);
-      if (figures.length > 0) remapFigures(json.data.body);
-      setResult({ ...result, title: json.data.title });
+      setHistory((h) => [...h, before]);
+      if (result.aiFigures) remapFigures(json.data.body);
+      setResult((r) => (r ? { ...r, title: json.data.title } : r));
       setBody(json.data.body);
       setRevText("");
-      setChanged(changedLines(body, json.data.body));
+      setChanged(changedLines(before.body, json.data.body));
       setRevMsg(
         json.data.unchanged
           ? { ok: false, text: "요청이 글에 반영되지 않았어요. 어느 부분을 어떻게 바꿀지 조금 더 구체적으로 적어 다시 요청해 주세요." }
           : { ok: true, text: json.data.notes, changes: json.data.changes },
       );
     } catch (err) {
-      setRevMsg({ ok: false, text: err instanceof Error ? err.message : "요청 실패" });
+      if (isCurrent(run.id) && !run.signal.aborted) setRevMsg({ ok: false, text: err instanceof Error ? err.message : "요청 실패" });
     } finally {
-      setRevising(false);
-      setLive(null);
+      if (isCurrent(run.id)) {
+        setRevising(false);
+        setLive(null);
+      }
     }
   }
 
   function undo() {
     const last = history.at(-1);
     if (!last || !result) return;
-    if (figures.length > 0) remapFigures(last.body);
+    setFigures(last.figures); // 그 시점의 그림 상태 그대로
     setHistory((h) => h.slice(0, -1));
     setResult({ ...result, title: last.title });
     setBody(last.body);
@@ -416,7 +451,7 @@ export default function StudioClient({
         {/* ── 입력 ── */}
         <form onSubmit={generate}>
           {/* 생성 중에는 입력을 잠가 사진 순서와 [사진N] 마커가 어긋나지 않게 함 */}
-          <fieldset disabled={loading} className="space-y-5">
+          <fieldset disabled={busy} className="space-y-5">
             <Card title="1. 사용할 AI">
               <div className="grid gap-2 sm:grid-cols-3">
                 {agents.map((a) => (
@@ -507,7 +542,7 @@ export default function StudioClient({
                         keywords: todayPick.keywords,
                       })
                     }
-                    disabled={loading}
+                    disabled={busy}
                     className="mt-2 w-full rounded-full bg-hb-yellow py-3 text-sm font-extrabold text-ink disabled:opacity-60"
                   >
                     {loading ? `${selectedAgent.label}가 글을 쓰는 중…` : "⚡ 이 주제로 바로 쓰기"}
@@ -517,7 +552,7 @@ export default function StudioClient({
               <button
                 type="button"
                 onClick={() => autoWrite()}
-                disabled={loading}
+                disabled={busy}
                 className={
                   todayPick
                     ? "mt-2 w-full rounded-full border-2 border-white/40 py-2.5 text-sm font-bold text-white disabled:opacity-60"
@@ -689,7 +724,7 @@ export default function StudioClient({
             </Card>
 
             <button
-              disabled={loading}
+              disabled={busy}
               className="w-full rounded-full bg-hb-navy py-4 text-lg font-extrabold text-white shadow-[0_4px_0_#00317a] disabled:opacity-60"
             >
               {loading ? `${selectedAgent.label}가 글을 쓰는 중… (1~3분)` : "✍️ 초안 만들기"}
@@ -771,6 +806,7 @@ export default function StudioClient({
                         setBody(e.target.value);
                         setChanged(null);
                       }}
+                      readOnly={revising}
                       className="h-[30rem] w-full resize-y rounded-lg border border-line p-3 text-[14px] leading-6"
                     />
                     <p className="mt-1 text-xs text-ink-soft">
@@ -866,10 +902,10 @@ export default function StudioClient({
                   value={revText}
                   onChange={(e) => setRevText(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !revising) revise(revText);
+                    if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !busy) revise(revText);
                   }}
                   rows={3}
-                  disabled={revising}
+                  disabled={busy}
                   placeholder={"예) 두 번째 소제목 내용을 더 짧게 줄여 주세요\n예) 마지막에 '12월 첫째 주 개강' 문장을 넣어 주세요"}
                   className="w-full rounded-lg border border-line p-3 text-sm leading-6"
                 />
@@ -878,7 +914,7 @@ export default function StudioClient({
                     <button
                       key={p}
                       type="button"
-                      disabled={revising}
+                      disabled={busy}
                       onClick={() => setRevText(p)}
                       className="rounded-full border border-line px-3 py-1 text-xs font-bold text-ink-soft hover:border-hb-blue disabled:opacity-50"
                     >
@@ -890,7 +926,7 @@ export default function StudioClient({
                   <button
                     type="button"
                     onClick={() => revise(revText)}
-                    disabled={revising || !revText.trim()}
+                    disabled={busy || !revText.trim()}
                     className="flex-1 rounded-full bg-hb-blue py-2.5 text-sm font-extrabold text-white disabled:opacity-50"
                   >
                     {revising ? `${selectedAgent.label}가 고치는 중… (30초~1분)` : "수정하기"}
@@ -899,7 +935,7 @@ export default function StudioClient({
                     <button
                       type="button"
                       onClick={undo}
-                      disabled={revising}
+                      disabled={busy}
                       className="rounded-full border-2 border-line px-4 text-sm font-bold text-ink-soft disabled:opacity-50"
                     >
                       ↩ 되돌리기
@@ -932,7 +968,7 @@ export default function StudioClient({
                   요청한 부분만 고치고 나머지는 그대로 둡니다. 새 날짜·인원·비용은 요청에 적은 것만 들어갑니다.
                 </p>
               </div>
-              {figures.length > 0 && (
+              {(result.aiFigures || figures.length > 0) && figuresOf(body).length > 0 && (
                 <div className="rounded-xl bg-white p-4 ring-1 ring-line">
                   <p className="mb-2 text-sm font-bold">🎨 AI 그림</p>
                   <div className="grid grid-cols-2 gap-3">

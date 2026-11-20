@@ -61,9 +61,16 @@ export async function runGemini(
   };
 
   let res = await call();
-  // 503 = Google 쪽 일시 과부하 → 잠깐 쉬고 한 번만 다시 시도
+  // 503 = Google 쪽 일시 과부하 → 잠깐 쉬고 한 번만 다시 시도 (기다리는 중 취소·시간 초과되면 바로 멈춤)
   if (res.status === 503) {
-    await new Promise((r) => setTimeout(r, 3000));
+    await res.body?.cancel().catch(() => {});
+    await new Promise<void>((resolve, reject) => {
+      if (ctrl.aborted) return reject(ctrl.reason);
+      const t = setTimeout(resolve, 3000);
+      ctrl.addEventListener("abort", () => (clearTimeout(t), reject(ctrl.reason)), { once: true });
+    }).catch(() => {
+      throw new AgentError("AGENT_ERROR", "요청이 취소되었거나 시간이 초과되었습니다. 다시 시도해 주세요.");
+    });
     res = await call();
   }
 
@@ -93,6 +100,10 @@ export async function runGemini(
     .filter((p) => !p.thought)
     .map((p) => p.text ?? "")
     .join("");
+  // 스트리밍은 끝난 이유(STOP)를 받아야 완성된 글로 본다 (중간에 연결이 끊긴 경우 대비)
+  if (onDelta && !cand?.finishReason) {
+    throw new AgentError("INCOMPLETE", "응답이 중간에 끊겼습니다. 다시 시도해 주세요.", "stream ended without finishReason");
+  }
   if (cand?.finishReason && cand.finishReason !== "STOP") {
     const why: Record<string, string> = {
       MAX_TOKENS: "응답이 너무 길어 중간에 끊겼습니다.",

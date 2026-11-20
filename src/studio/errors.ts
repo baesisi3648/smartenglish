@@ -35,3 +35,13 @@ export function redactSecrets(text: string) {
   for (const re of KEY_PATTERNS) out = out.replace(re, "[가림]");
   return out;
 }
+
+/**
+ * 스트리밍 때 끝에서 보류할 글자 수: 가장 긴 비밀값보다 길게 잡는다.
+ * (비밀값 앞부분만 먼저 화면에 나가는 일이 없도록 — 값 전체가 들어와야 가릴 수 있음)
+ */
+export function secretHold() {
+  let max = 220; // API 키 형식(sk-…, AIza…)의 넉넉한 최대 길이
+  for (const name of SECRET_ENV) max = Math.max(max, process.env[name]?.length ?? 0);
+  return max + 16;
+}

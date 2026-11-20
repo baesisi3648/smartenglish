@@ -7,7 +7,7 @@ import { getLatestPosts } from "@/lib/blog";
 import { academyFacts } from "@/studio/facts";
 import { todayKst, upcomingSeasons } from "@/studio/planner";
 import { buildPrompt, parseDraft, type AutoContext } from "@/studio/prompt";
-import { checkQuota, checkStudioRequest, errorResponse, fail, resolveAgent, runModel, streamResponse, wantsStream } from "@/studio/request";
+import { checkQuota, checkStudioRequest, errorResponse, fail, redactDeep, refundIfTrial, resolveAgent, runModel, streamResponse, wantsStream } from "@/studio/request";
 import type { OnDelta } from "@/studio/sse";
 import { assemble } from "@/studio/template";
 
@@ -108,17 +108,19 @@ export async function POST(req: NextRequest) {
   if (overQuota) return overQuota;
 
   // 결과 만들기 (스트리밍이면 쓰는 대로 화면에 보내고, 끝나면 같은 JSON을 마지막 줄로)
-  const produce = async (onDelta?: OnDelta) => {
+  const produce = async (onDelta?: OnDelta, signal: AbortSignal = req.signal) => {
     try {
       // ACP: 에이전트의 이미지 지원 여부를 확인한 뒤 프롬프트를 구성 — 생성은 한 번만
-      const run = await runModel(agent, prompt, images, req.signal, onDelta);
-      const draft = parseDraft(run.text);
-      if (!draft) {
+      const run = await runModel(agent, prompt, images, signal, onDelta);
+      const parsed = parseDraft(run.text);
+      if (!parsed) {
+        refundIfTrial(agent);
         return NextResponse.json(
-          { success: false, code: "PARSE_FAILED", error: "AI 응답을 해석하지 못했습니다. 다시 시도해 주세요.", raw: run.text.slice(0, 4000) },
+          { success: false, code: "PARSE_FAILED", error: "AI 응답을 해석하지 못했습니다. 다시 시도해 주세요." },
           { status: 502 },
         );
       }
+      const draft = redactDeep(parsed); // JSON 이스케이프로 숨긴 비밀값까지 가림
       return NextResponse.json({
         success: true,
         data: {
@@ -134,5 +136,5 @@ export async function POST(req: NextRequest) {
       return errorResponse(e);
     }
   };
-  return wantsStream(req) ? streamResponse(produce) : produce();
+  return wantsStream(req) ? streamResponse((onDelta, signal) => produce(onDelta, AbortSignal.any([req.signal, signal]))) : produce();
 }

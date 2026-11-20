@@ -5,7 +5,8 @@ import { runAgent, type PromptImage } from "./acp-run";
 import { AGENTS, isAgentId, type AgentDef } from "./agents";
 import { verifySessionToken, SESSION_COOKIE } from "./auth";
 import { runDeepseek } from "./deepseek-api";
-import { AgentError, redactSecrets } from "./errors";
+import { AgentError, redactSecrets, secretHold } from "./errors";
+import { partialField } from "./partial-json";
 import { runGemini } from "./gemini-api";
 import type { OnDelta } from "./sse";
 import { DEFAULT_OPENAI_MODEL, OPENAI_KEY_PATTERN, isOpenAIModel } from "./openai-models";
@@ -139,19 +140,22 @@ export function wantsStream(req: NextRequest) {
   return req.headers.get("x-stream") === "1";
 }
 
-/** 비밀값 가림이 조각 경계에 걸리지 않게, 맨 끝 몇백 자는 다음 조각이 올 때까지 보내지 않는다 (키 길이보다 길게) */
-const STREAM_HOLD = 320;
 const STREAM_FLUSH_MS = 120;
+const STREAM_FIELDS = ["title", "body"] as const;
 
 /**
- * 결과는 기존 JSON 응답 그대로 두고, 그 전에 AI가 쓰는 글을 NDJSON 줄로 흘려보낸다.
- *   {"t":"d","v":"이어 쓴 글"}  {"t":"reset","v":"전체 글"}  {"t":"end","status":200,"body":{...기존 응답}}
- * 보내는 글은 매번 redactSecrets 를 거친 누적본에서 잘라 낸다 (모델 출력에 서버 비밀값이 섞여도 화면에 나가지 않게).
+ * 결과는 기존 JSON 응답 그대로 두고, 그 전에 AI가 쓰는 제목·본문을 NDJSON 줄로 흘려보낸다.
+ *   {"t":"d","f":"body","v":"이어 쓴 글"}  {"t":"r","f":"body","v":"전체 글"}  {"t":"end","status":200,"body":{...기존 응답}}
+ * 보안: AI 원문(JSON)을 그대로 보내지 않고, 서버에서 항목 값을 풀어(\u 이스케이프 등 디코딩) redactSecrets 를 거친 뒤 보낸다.
+ * 아직 안 닫힌 항목은 끝에서 secretHold()자(가장 긴 비밀값보다 김)를 보류해, 비밀값의 앞부분만 먼저 나가는 일을 막는다.
+ * 화면이 연결을 끊으면 work 에 넘긴 signal 이 취소된다 (AI 호출도 중단).
  */
-export function streamResponse(work: (onDelta: OnDelta) => Promise<Response>) {
+export function streamResponse(work: (onDelta: OnDelta, signal: AbortSignal) => Promise<Response>) {
   const enc = new TextEncoder();
+  const abort = new AbortController();
+  const hold = secretHold();
   let acc = "";
-  let sent = "";
+  const sent: Record<string, string> = { title: "", body: "" };
   let timer: ReturnType<typeof setTimeout> | null = null;
   let closed = false;
 
@@ -167,18 +171,23 @@ export function streamResponse(work: (onDelta: OnDelta) => Promise<Response>) {
       };
       const flush = () => {
         timer = null;
-        const red = redactSecrets(acc);
-        const stable = red.slice(0, Math.max(0, red.length - STREAM_HOLD));
-        if (stable.length <= sent.length) return;
-        if (stable.startsWith(sent)) write({ t: "d", v: stable.slice(sent.length) });
-        else write({ t: "reset", v: stable });
-        sent = stable;
+        if (closed) return;
+        for (const f of STREAM_FIELDS) {
+          const { value, done } = partialField(acc, f);
+          const red = redactSecrets(value);
+          const stable = done ? red : red.slice(0, Math.max(0, red.length - hold));
+          if (stable === sent[f]) continue;
+          if (stable.startsWith(sent[f])) write({ t: "d", f, v: stable.slice(sent[f].length) });
+          else write({ t: "r", f, v: stable }); // 가림 등으로 앞부분이 달라지면 전체를 다시 보냄
+          sent[f] = stable;
+        }
       };
       const onDelta: OnDelta = (t) => {
+        if (closed) return;
         acc += t;
         if (!timer) timer = setTimeout(flush, STREAM_FLUSH_MS);
       };
-      work(onDelta)
+      work(onDelta, abort.signal)
         .catch((e) => errorResponse(e))
         .then(async (res) => {
           if (timer) clearTimeout(timer);
@@ -194,6 +203,7 @@ export function streamResponse(work: (onDelta: OnDelta) => Promise<Response>) {
     cancel() {
       closed = true;
       if (timer) clearTimeout(timer);
+      abort.abort(); // 화면이 떠나면 AI 호출도 멈춤
     },
   });
   return new Response(body, {
@@ -203,4 +213,20 @@ export function streamResponse(work: (onDelta: OnDelta) => Promise<Response>) {
       "X-Accel-Buffering": "no",
     },
   });
+}
+
+/**
+ * 파싱한 결과(제목·본문·태그·메모 등)의 모든 문자열에 비밀값 가림을 한 번 더 적용한다.
+ * runModel 은 AI 원문을 가리지만, JSON 이스케이프(\u002d 등)로 쓴 값은 파싱 뒤에야 원래 글자가 되므로.
+ */
+export function redactDeep<T>(v: T): T {
+  if (typeof v === "string") return redactSecrets(v) as T;
+  if (Array.isArray(v)) return v.map(redactDeep) as T;
+  if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, redactDeep(x)])) as T;
+  return v;
+}
+
+/** GPT 체험: AI는 답했지만 결과를 쓸 수 없을 때(형식 오류) 하루 횟수를 돌려준다 */
+export function refundIfTrial({ def }: ResolvedAgent) {
+  if (def.id === "gpt") refundTrialQuota();
 }

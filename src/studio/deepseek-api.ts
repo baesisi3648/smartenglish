@@ -42,9 +42,13 @@ function netError(e: unknown) {
 async function readStream(body: ReadableStream<Uint8Array>, onDelta: OnDelta): Promise<ChatResponse> {
   let text = "";
   let finish: string | undefined;
+  let done = false;
   try {
     for await (const data of sseData(body)) {
-      if (data.trim() === "[DONE]") break;
+      if (data.trim() === "[DONE]") {
+        done = true;
+        break;
+      }
       const chunk = parseJson<StreamChunk>(data);
       if (!chunk) continue;
       if (chunk.error) throw new AgentError("AGENT_ERROR", "DeepSeek에서 오류가 났습니다. 다시 시도해 주세요.", chunk.error.message);
@@ -59,7 +63,9 @@ async function readStream(body: ReadableStream<Uint8Array>, onDelta: OnDelta): P
   } catch (e) {
     throw netError(e);
   }
-  return { choices: [{ message: { content: text }, finish_reason: finish }] };
+  // 완료 신호([DONE]·종료 사유) 없이 닫히면 글이 잘렸을 수 있음
+  if (!done && !finish) throw new AgentError("INCOMPLETE", "응답이 중간에 끊겼습니다. 다시 시도해 주세요.", "stream ended without [DONE]");
+  return { choices: [{ message: { content: text }, finish_reason: finish ?? "stop" }] };
 }
 
 async function call(content: Content[], signal: AbortSignal, onDelta?: OnDelta) {
@@ -125,6 +131,9 @@ export async function runDeepseek(
   if (choice?.finish_reason === "length") throw new AgentError("INCOMPLETE", "응답이 너무 길어 중간에 끊겼습니다.");
   if (choice?.finish_reason === "content_filter") {
     throw new AgentError("INCOMPLETE", "DeepSeek 안전 필터에 걸렸습니다. 입력 내용이나 사진을 확인해 주세요.");
+  }
+  if (choice?.finish_reason && choice.finish_reason !== "stop") {
+    throw new AgentError("INCOMPLETE", "생성이 비정상적으로 끝났습니다. 다시 시도해 주세요.", choice.finish_reason);
   }
   if (!text.trim()) throw new AgentError("INCOMPLETE", "DeepSeek이 빈 응답을 보냈습니다. 다시 시도해 주세요.");
   return { text, imagesSent };

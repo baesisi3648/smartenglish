@@ -77,9 +77,16 @@ export async function runAgent(
   { timeoutMs = 240_000, signal, onDelta }: { timeoutMs?: number; signal?: AbortSignal; onDelta?: OnDelta } = {},
 ): Promise<{ text: string; imagesSent: boolean }> {
   if (busy) throw new AgentError("BUSY", "다른 초안을 생성 중입니다. 끝난 뒤 다시 시도해 주세요.");
+  if (signal?.aborted) throw new AgentError("AGENT_ERROR", "요청이 취소되었습니다.");
+  busy = true; // 첫 await 전에 잡아야 동시에 두 건이 통과하지 않음
   const def = ACP_AGENTS[agentId];
-  const cwd = await mkdtemp(path.join(tmpdir(), "hb-studio-"));
-  busy = true;
+  let cwd: string;
+  try {
+    cwd = await mkdtemp(path.join(tmpdir(), "hb-studio-"));
+  } catch (e) {
+    busy = false;
+    throw new AgentError("SPAWN_FAILED", "임시 폴더를 만들지 못했습니다. 다시 시도해 주세요.", String(e));
+  }
   const env = childEnv();
 
   // command/args 는 코드에 고정된 값만 사용 (사용자 입력 없음)

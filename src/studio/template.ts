@@ -1,4 +1,5 @@
 import { academy } from "@/content/academy";
+import { outroStart } from "./format";
 import type { Draft } from "./prompt";
 
 /** 블로그 고정 태그 (기존 글에서 반복 사용) */
@@ -64,9 +65,10 @@ export function wrapBody(core: string) {
 export function coreBody(full: string) {
   let text = full.replace(/\r/g, "");
   if (text.startsWith(INTRO)) text = text.slice(INTRO.length);
-  // 끝인사는 시스템이 맨 뒤에 붙이므로 마지막 것에서 자른다 (본문 중간에 같은 문구가 있어도 유지)
-  const end = text.lastIndexOf(`" 감사합니다 "`);
-  if (end >= 0) text = text.slice(0, end);
+  // 시스템이 붙인 끝인사 블록(감사합니다 + 연락처)만 뗀다 — 미리보기와 같은 경계 판단
+  const lines = text.split("\n");
+  const end = outroStart(lines);
+  if (end >= 0) text = lines.slice(0, end).join("\n");
   return text.trim();
 }
 
