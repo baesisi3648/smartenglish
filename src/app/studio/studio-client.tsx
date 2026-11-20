@@ -582,6 +582,22 @@ export default function StudioClient({
                 원장님이 따로 적지 않아도, 교습소 수업 방식·과정 같은 <b>확인된 정보</b>와 지금 시기에 맞는 교육
                 이야기로 그대로 올릴 수 있는 글을 씁니다. 주제도 AI가 최근 글과 겹치지 않게 정합니다.
               </p>
+              {isByok && (
+                // AI 그림: 내 API 키일 때만. 아래 4번 칸의 같은 설정과 연결됨 (⚡ 바로 쓰기에서도 놓치지 않게 여기에도 둠)
+                <label className="mt-3 flex cursor-pointer items-start gap-2 rounded-xl bg-white/10 p-3 text-xs leading-5">
+                  <input
+                    type="checkbox"
+                    checked={aiImages}
+                    onChange={(e) => setAiImages(e.target.checked)}
+                    className="mt-0.5 accent-[var(--hb-yellow)]"
+                  />
+                  <span>
+                    <b className="text-hb-yellow">🎨 글 중간에 AI 그림 넣기 (최대 {MAX_AI_IMAGES}장)</b>
+                    <br />
+                    <span className="text-white/70">설명용 일러스트를 그려 본문 사이에 넣습니다. 그림 1장마다 OpenAI 요금이 따로 듭니다.</span>
+                  </span>
+                </label>
+              )}
               {todayPick && (
                 <div className="mt-3 rounded-xl bg-white/10 p-3">
                   <p className="text-[11px] font-bold text-hb-yellow">오늘의 맞춤 추천</p>
