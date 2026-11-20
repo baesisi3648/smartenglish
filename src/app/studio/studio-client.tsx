@@ -29,25 +29,6 @@ function writeLocal(key: string, value: string | null) {
 const KEY_STORE = "hb-openai-key";
 const MODEL_STORE = "hb-openai-model";
 
-/** 에디터 붙여넣기용: 사진을 긴 변 1200px JPEG data URL로 (원본 그대로 넣으면 클립보드가 너무 커짐) */
-async function toDataUrl(src: string, maxSide = 1200): Promise<string | undefined> {
-  try {
-    const bmp = await createImageBitmap(await (await fetch(src)).blob());
-    const scale = Math.min(1, maxSide / Math.max(bmp.width, bmp.height));
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.round(bmp.width * scale);
-    canvas.height = Math.round(bmp.height * scale);
-    const ctx = canvas.getContext("2d")!;
-    ctx.fillStyle = "#fff";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
-    bmp.close();
-    return canvas.toDataURL("image/jpeg", 0.85);
-  } catch {
-    return undefined;
-  }
-}
-
 /** AI 그림 상태 — [그림: 설명] 문구로 짝지음 (본문을 고쳐 순서가 바뀌어도 같은 그림이 같은 자리에) */
 type FigureState = { desc: string; status: "loading" | "done" | "error"; src?: string; error?: string };
 const figureFor = (figures: FigureState[], desc: string) => figures.find((f) => f.desc === desc);
@@ -161,6 +142,8 @@ export default function StudioClient({
   const [result, setResult] = useState<Result | null>(null);
   const [body, setBody] = useState("");
   const [copied, setCopied] = useState("");
+  const [zipState, setZipState] = useState<"" | "busy" | "done" | "error">("");
+  const zipBusy = useRef(false);
   /** 스트리밍: AI가 지금까지 쓴 제목·본문 (생성·고치기 중에만) */
   const [live, setLive] = useState<LiveFields | null>(null);
   // 요청 순번·취소: 늦게 온 이전 응답이 새 글을 덮어쓰지 않게, 새 요청·화면 이탈 시 이전 요청은 취소
@@ -168,6 +151,11 @@ export default function StudioClient({
   const inFlight = useRef<AbortController | null>(null);
   const draftSeq = useRef(0); // 그림 요청이 어느 초안 것인지
   useEffect(() => () => inFlight.current?.abort(), []);
+  const resultPhotos = useRef<string[]>([]);
+  useEffect(() => () => resultPhotos.current.forEach(URL.revokeObjectURL), []);
+  useEffect(() => {
+    resultPhotos.current = result?.photos ?? [];
+  }, [result]);
   function startRun() {
     inFlight.current?.abort();
     const ctrl = new AbortController();
@@ -290,11 +278,14 @@ export default function StudioClient({
         const withFigures = isByok && aiImages;
         const descs = withFigures ? [...new Set(figuresOf(json.data.body))].slice(0, MAX_AI_IMAGES) : [];
         // 제출 당시 사진 순서를 결과와 함께 고정 ([사진N] 마커와 일치)
-        setResult({
-          ...json.data,
-          topic: req.topic,
-          photos: files.map((f) => URL.createObjectURL(f)),
-          aiFigures: withFigures,
+        setResult((prev) => {
+          prev?.photos.forEach(URL.revokeObjectURL); // 이전 초안 사진 주소 정리
+          return {
+            ...json.data,
+            topic: req.topic,
+            photos: files.map((f) => URL.createObjectURL(f)),
+            aiFigures: withFigures,
+          };
         });
         setHistory([]);
         setRevMsg(null);
@@ -381,7 +372,14 @@ export default function StudioClient({
   function undo() {
     const last = history.at(-1);
     if (!last || !result) return;
-    setFigures(last.figures); // 그 시점의 그림 상태 그대로
+    // 그 시점의 그림 목록으로 되돌리되, 그사이 다 그려졌거나 실패한 그림은 최신 상태를 쓴다 ('그리는 중'에 갇히지 않게)
+    setFigures((prev) =>
+      last.figures.map((f) => {
+        const cur = figureFor(prev, f.desc);
+        if (cur && cur.status !== "loading") return cur;
+        return f.status === "loading" ? (cur ?? { desc: f.desc, status: "error", error: "다시 그려 주세요" }) : f;
+      }),
+    );
     setHistory((h) => h.slice(0, -1));
     setResult({ ...result, title: last.title });
     setBody(last.body);
@@ -404,12 +402,9 @@ export default function StudioClient({
     if (!result) return;
     setCopied("에디터-준비");
     try {
-      const photos = await Promise.all(result.photos.map((p) => toDataUrl(p)));
-      const figs = figuresOf(body).map((d) => {
-        const f = figureFor(figures, d);
-        return f?.status === "done" ? f.src : undefined;
-      });
-      const html = toEditorHtml(body, { photos, figures: figs, center });
+      // 네이버 에디터는 붙여넣기로 이미지를 받지 않아, 이미지 대신 [사진N]·[그림N] 자리 표시를 남긴다
+      // (사진은 '📦 한 번에 저장'으로 받아 그 자리에 끌어다 놓기)
+      const html = toEditorHtml(body, { photos: [], figures: [], center });
       await navigator.clipboard.write([
         new ClipboardItem({
           "text/html": new Blob([html], { type: "text/html" }),
@@ -429,8 +424,9 @@ export default function StudioClient({
    * 본문에 자리가 없는 사진은 뒤에 '추가_사진N'으로 넣는다.
    */
   async function saveImages() {
-    if (!result) return;
-    setCopied("사진-준비");
+    if (!result || zipBusy.current) return;
+    zipBusy.current = true;
+    setZipState("busy");
     try {
       const files: { name: string; data: Uint8Array }[] = [];
       const used = new Set<number>();
@@ -454,7 +450,7 @@ export default function StudioClient({
       }
       for (let n = 1; n <= result.photos.length; n++) if (!used.has(n)) await add(`추가_사진${n}`, result.photos[n - 1]);
       if (files.length === 0) {
-        setCopied("");
+        setZipState("");
         return;
       }
       const url = URL.createObjectURL(makeZip(files));
@@ -463,9 +459,12 @@ export default function StudioClient({
       a.download = `블로그사진_${new Date().toISOString().slice(0, 10)}.zip`;
       a.click();
       setTimeout(() => URL.revokeObjectURL(url), 10_000);
-      flash("사진");
+      setZipState("done");
+      setTimeout(() => setZipState((z) => (z === "done" ? "" : z)), 4000);
     } catch {
-      setCopied("");
+      setZipState("error");
+    } finally {
+      zipBusy.current = false;
     }
   }
 
@@ -933,14 +932,16 @@ export default function StudioClient({
                     <button
                       type="button"
                       onClick={saveImages}
-                      disabled={copied === "사진-준비"}
+                      disabled={zipState === "busy"}
                       className="w-full rounded-full border-2 border-hb-navy bg-white py-2.5 text-sm font-extrabold text-hb-navy disabled:opacity-60"
                     >
-                      {copied === "사진"
-                        ? "저장됨 ✓ 압축을 풀고 [사진N] 자리에 같은 번호 파일을 끌어다 놓으세요"
-                        : copied === "사진-준비"
+                      {zipState === "done"
+                        ? "저장됨 ✓ 압축을 풀고 [사진N]·[그림N] 자리에 같은 번호 파일을 끌어다 놓으세요"
+                        : zipState === "busy"
                           ? "사진 묶는 중…"
-                          : `📦 사진·그림 ${imageCount}장 한 번에 저장 (본문 순서대로 번호)`}
+                          : zipState === "error"
+                            ? "저장하지 못했어요 — 다시 눌러 주세요"
+                            : `📦 사진·그림 ${imageCount}장 한 번에 저장 (본문 순서대로 번호)`}
                     </button>
                   )}
                   {figures.some((f) => f.status === "loading") && (
@@ -956,8 +957,8 @@ export default function StudioClient({
                     </li>
                     {(result.photos.length > 0 || figuresOf(body).length > 0) && (
                       <li>
-                        사진: <b>📦 한 번에 저장</b> → 압축 풀기 → 에디터의 <b>[사진N]</b> 글자 자리에 같은 번호 파일을 끌어다
-                        놓고, [사진N] 글자는 지우기
+                        사진·그림: <b>📦 한 번에 저장</b> → 압축 풀기 → 에디터의 <b>[사진N]</b>·<b>[그림N]</b> 글자 자리에 같은
+                        번호 파일을 끌어다 놓고, 자리 글자는 지우기
                       </li>
                     )}
                     <li>

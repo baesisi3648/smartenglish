@@ -218,6 +218,11 @@ export function toEditorHtml(
 export function changedLines(before: string, after: string): Set<number> {
   const a = before.split("\n").map((l) => l.trim());
   const b = after.split("\n").map((l) => l.trim());
+  // 아주 긴 글은 표가 커지므로(메모리·시간) "예전 글에 없던 줄"만 표시하는 간단한 방식
+  if (a.length * b.length > 200_000) {
+    const old = new Set(a);
+    return new Set(b.flatMap((l, j) => (l && !old.has(l) ? [j] : [])));
+  }
   const dp = Array.from({ length: a.length + 1 }, () => new Array<number>(b.length + 1).fill(0));
   for (let i = a.length - 1; i >= 0; i--) {
     for (let j = b.length - 1; j >= 0; j--) {

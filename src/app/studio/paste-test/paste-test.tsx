@@ -20,7 +20,9 @@ const SAMPLE = `안녕하세요
 
 [사진1]`;
 
-type Test = { id: string; label: string; desc: string; make: (ctx: Ctx) => Promise<string> | string };
+type Test = { id: string; label: string; desc: string; text?: string; make: (ctx: Ctx) => Promise<string> | string };
+/** 배포 사이트의 공개 이미지 (내 PC에서 열어도 https 주소로 시험) */
+const HTTPS_IMAGE = "https://smartenglish-kappa.vercel.app/og.png";
 type Ctx = { origin: string; placeUrl: string };
 
 const ALIGN_TESTS: { mode: AlignMode; label: string; desc: string }[] = [
@@ -56,19 +58,21 @@ const TESTS: Test[] = [
     id: "img-data",
     label: "E. 사진 (지금 방식)",
     desc: "사진을 글 속 데이터로 넣기 (data URL)",
+    text: "(사진 시험 E — 글자만 붙었다면 사진은 안 들어간 것)",
     make: () => toEditorHtml("[사진1]\n사진 아래 글", { photos: [sampleImage()], figures: [], center: true, align: "all" }),
   },
   {
     id: "img-https",
     label: "F. 사진 (인터넷 주소)",
     desc: "사진을 인터넷 주소로 넣기 (https)",
-    make: ({ origin }) =>
-      toEditorHtml("[사진1]\n사진 아래 글", { photos: [`${origin}/og.png`], figures: [], center: true, align: "all", allowHttpsImages: true }),
+    text: "(사진 시험 F — 글자만 붙었다면 사진은 안 들어간 것)",
+    make: () => toEditorHtml("[사진1]\n사진 아래 글", { photos: [HTTPS_IMAGE], figures: [], center: true, align: "all", allowHttpsImages: true }),
   },
   {
     id: "map",
     label: "G. 네이버 지도 링크",
     desc: "지도 주소 한 줄 (지도·링크 카드로 바뀌는지)",
+    text: "(지도 시험 G)",
     make: ({ placeUrl }) => `<p style="text-align:center;" align="center"><a href="${placeUrl}">${placeUrl}</a></p>`,
   },
 ];
@@ -86,7 +90,7 @@ export default function PasteTest({ placeUrl }: { placeUrl: string }) {
       await navigator.clipboard.write([
         new ClipboardItem({
           "text/html": new Blob([html], { type: "text/html" }),
-          "text/plain": new Blob([toPlainText(SAMPLE)], { type: "text/plain" }),
+          "text/plain": new Blob([t.text ?? toPlainText(SAMPLE)], { type: "text/plain" }),
         }),
       ]);
       setCopied(t.id);
@@ -135,22 +139,26 @@ export default function PasteTest({ placeUrl }: { placeUrl: string }) {
                   {copied === t.id ? "복사됨 ✓" : "복사"}
                 </button>
               </div>
-              <div className="mt-3 flex gap-1.5" role="radiogroup" aria-label={`${t.label} 결과`}>
+              <fieldset className="mt-3 flex gap-1.5">
+                <legend className="sr-only">{t.label} 결과</legend>
                 {RESULTS.map((r) => (
-                  <button
+                  <label
                     key={r}
-                    type="button"
-                    role="radio"
-                    aria-checked={marks[t.id] === r}
-                    onClick={() => setMarks((m) => ({ ...m, [t.id]: r }))}
-                    className={`rounded-full border px-3 py-1 text-xs font-bold ${
+                    className={`cursor-pointer rounded-full border px-3 py-1 text-xs font-bold has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-hb-blue ${
                       marks[t.id] === r ? "border-hb-navy bg-hb-navy text-white" : "border-line text-ink-soft"
                     }`}
                   >
+                    <input
+                      type="radio"
+                      name={`result-${t.id}`}
+                      className="sr-only"
+                      checked={marks[t.id] === r}
+                      onChange={() => setMarks((m) => ({ ...m, [t.id]: r }))}
+                    />
                     {r}
-                  </button>
+                  </label>
                 ))}
-              </div>
+              </fieldset>
             </li>
           ))}
         </ol>
@@ -173,14 +181,21 @@ export default function PasteTest({ placeUrl }: { placeUrl: string }) {
           <button
             type="button"
             onClick={async () => {
-              await navigator.clipboard.writeText(summary);
-              setCopied("summary");
-              setTimeout(() => setCopied(""), 1500);
+              try {
+                await navigator.clipboard.writeText(summary);
+                setCopied("summary");
+              } catch {
+                setCopied("summary-fail");
+              }
+              setTimeout(() => setCopied(""), 2500);
             }}
             className="mt-2 w-full rounded-full bg-hb-blue py-2.5 text-sm font-extrabold text-white"
           >
             {copied === "summary" ? "복사됨 ✓ 개발자에게 붙여넣어 보내 주세요" : "결과 복사"}
           </button>
+          <p aria-live="polite" className="mt-1 text-xs text-red-700">
+            {copied === "summary-fail" ? "복사하지 못했습니다. 위 결과 글을 직접 선택해 복사해 주세요." : ""}
+          </p>
         </div>
       </div>
     </main>

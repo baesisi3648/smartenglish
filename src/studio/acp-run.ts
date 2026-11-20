@@ -87,6 +87,11 @@ export async function runAgent(
     busy = false;
     throw new AgentError("SPAWN_FAILED", "임시 폴더를 만들지 못했습니다. 다시 시도해 주세요.", String(e));
   }
+  if (signal?.aborted) {
+    await rm(cwd, { recursive: true, force: true }).catch(() => {});
+    busy = false;
+    throw new AgentError("AGENT_ERROR", "요청이 취소되었습니다.");
+  }
   const env = childEnv();
 
   // command/args 는 코드에 고정된 값만 사용 (사용자 입력 없음)

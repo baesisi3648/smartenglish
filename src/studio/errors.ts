@@ -26,11 +26,21 @@ const SECRET_ENV = ["STUDIO_PASSWORD", "STUDIO_SECRET", "GEMINI_API_KEY", "DEEPS
 // 마지막 패턴: OpenAI 오류 문구가 키 앞뒤 몇 글자를 보여 주는 형태 (sk-proj-***…abcd) — 일부라도 로그에 남기지 않음
 const KEY_PATTERNS = [/AIza[0-9A-Za-z_-]{30,}/g, /\bsk-[A-Za-z0-9_-]{16,}/g, /\bsk-[A-Za-z0-9_-]*\*+[A-Za-z0-9_-]*/g];
 
+/** 비밀값 조각 길이: 이 길이 이상 연속으로 같으면 일부라도 가린다 (짧은 우연 일치는 무시) */
+const PARTIAL = 10;
+
 export function redactSecrets(text: string) {
   let out = text;
   for (const name of SECRET_ENV) {
     const v = process.env[name];
-    if (v && v.length >= 6) out = out.split(v).join("[가림]");
+    if (!v || v.length < 6) continue;
+    out = out.split(v).join("[가림]");
+    // 비밀값의 연속 조각(앞부분만 쓰고 끝난 경우, 길이 제한에 잘린 경우 등)도 가림
+    const w = Math.min(PARTIAL, v.length);
+    for (let i = 0; i + w <= v.length; i++) {
+      const piece = v.slice(i, i + w);
+      if (out.includes(piece)) out = out.split(piece).join("[가림]");
+    }
   }
   for (const re of KEY_PATTERNS) out = out.replace(re, "[가림]");
   return out;

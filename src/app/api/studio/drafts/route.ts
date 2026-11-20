@@ -120,18 +120,16 @@ export async function POST(req: NextRequest) {
           { status: 502 },
         );
       }
-      const draft = redactDeep(parsed); // JSON 이스케이프로 숨긴 비밀값까지 가림
-      return NextResponse.json({
-        success: true,
-        data: {
-          ...assemble(draft, keywords),
-          keywords,
-          agent: def.id,
-          imagesSeen: run.imagesSent,
-          examplesUsed: examples.length,
-          auto,
-        },
+      // 조립(태그 공백 제거 등)까지 끝낸 최종 응답 전체를 가림 — JSON 이스케이프로 숨긴 비밀값까지
+      const data = redactDeep({
+        ...assemble(parsed, keywords),
+        keywords,
+        agent: def.id,
+        imagesSeen: run.imagesSent,
+        examplesUsed: examples.length,
+        auto,
       });
+      return NextResponse.json({ success: true, data });
     } catch (e) {
       return errorResponse(e);
     }

@@ -29,8 +29,10 @@ export async function POST(req: NextRequest) {
 
   const instruction = str(input.instruction, MAX_INSTRUCTION_CHARS).trim();
   if (!instruction) return fail(400, "INSTRUCTION_REQUIRED", "어떻게 고칠지 적어 주세요.");
-  const body = coreBody(str(input.body, MAX_POST_CHARS));
+  // 인사·연락처를 먼저 떼고 길이를 본다 (조용히 잘라 뒷부분을 잃지 않게, 넘치면 거절)
+  const body = coreBody(typeof input.body === "string" ? input.body : "");
   if (!body) return fail(400, "BODY_REQUIRED", "고칠 본문이 없습니다.");
+  if (body.length > MAX_POST_CHARS) return fail(413, "BODY_TOO_LONG", `본문이 너무 깁니다 (${MAX_POST_CHARS}자까지). 나눠서 고쳐 주세요.`);
   const keyword = sanitizeKeywords([str(input.keyword, 40)])[0] ?? "";
   const title = withKeyword(str(input.title, 120), "");
   const topic = str(input.topic, MAX_TOPIC_CHARS).trim();
@@ -51,18 +53,17 @@ export async function POST(req: NextRequest) {
           { status: 502 },
         );
       }
-      const draft = redactDeep(parsed); // JSON 이스케이프로 숨긴 비밀값까지 가림
-      return NextResponse.json({
-        success: true,
-        data: {
-          title: withKeyword(draft.title || title, keyword),
-          body: wrapBody(draft.body),
-          notes: draft.notes,
-          changes: draft.changes ?? [],
-          // 본문·제목이 그대로면 화면에서 "반영되지 않았어요"로 알린다
-          unchanged: draft.body.trim() === body.trim() && (draft.title || title).trim() === title.trim(),
-        },
+      const draft = parsed;
+      // 조립까지 끝낸 최종 응답 전체를 가림 — JSON 이스케이프로 숨긴 비밀값까지
+      const data = redactDeep({
+        title: withKeyword(draft.title || title, keyword),
+        body: wrapBody(draft.body),
+        notes: draft.notes,
+        changes: draft.changes ?? [],
+        // 본문·제목이 그대로면 화면에서 "반영되지 않았어요"로 알린다
+        unchanged: draft.body.trim() === body.trim() && (draft.title || title).trim() === title.trim(),
       });
+      return NextResponse.json({ success: true, data });
     } catch (e) {
       return errorResponse(e);
     }

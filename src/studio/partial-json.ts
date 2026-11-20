@@ -49,7 +49,7 @@ function readString(raw: string, start: number): { value: string; done: boolean;
       i += 5;
       continue;
     }
-    out += ({ n: "\n", t: "\t", r: "", b: "", f: "" } as Record<string, string>)[n] ?? n;
+    out += ({ n: "\n", t: "\t", r: "\r", b: "\b", f: "\f" } as Record<string, string>)[n] ?? n;
     i += 1;
   }
   // 닫히지 않음: 마지막 글자가 짝 없는 상위 서로게이트면 보류
