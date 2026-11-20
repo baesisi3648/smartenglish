@@ -6,7 +6,18 @@ import type { PostType } from "@/studio/post-types";
 import type { Plan, PlanIdea, TypeStat } from "@/studio/planner";
 import type { QuickIdea } from "@/studio/quick-ideas";
 import { fetchStream, type LiveFields } from "@/studio/stream-client";
-import { BLOG_STYLE } from "@/studio/blog-style";
+import {
+  BLOG_STYLE,
+  DEFAULT_TEXT_STYLE,
+  NAVER_FONTS,
+  NAVER_SIZES,
+  THANKS_FONT,
+  fontFaceCss,
+  fontStack,
+  normalizeTextStyle,
+  type FontId,
+  type TextStyle,
+} from "@/studio/blog-style";
 import { changedLines, figuresOf, parseBody, toEditorHtml, toPlainText, type Span } from "@/studio/format";
 import { DEFAULT_OPENAI_MODEL, MAX_AI_IMAGES, OPENAI_KEY_PATTERN, OPENAI_MODELS } from "@/studio/openai-models";
 import { makeZip } from "@/studio/zip";
@@ -28,6 +39,7 @@ function writeLocal(key: string, value: string | null) {
 }
 const KEY_STORE = "hb-openai-key";
 const MODEL_STORE = "hb-openai-model";
+const STYLE_STORE = "hb-studio-text-style";
 
 /** AI 그림 상태 — [그림: 설명] 문구로 짝지음 (본문을 고쳐 순서가 바뀌어도 같은 그림이 같은 자리에) */
 type FigureState = { desc: string; status: "loading" | "done" | "error"; src?: string; error?: string };
@@ -118,6 +130,22 @@ export default function StudioClient({
   const [figures, setFigures] = useState<FigureState[]>([]);
   const [editText, setEditText] = useState(false);
   const [center, setCenter] = useState(true); // 기본: 가운데 정렬
+  // 글씨 크기·글씨체: 한 번 고르면 이 브라우저에 기억 (다음 글에도 같은 설정)
+  const savedStyle = useSyncExternalStore(noopSubscribe, () => readLocal(STYLE_STORE), () => null);
+  const [stylePicked, setStylePicked] = useState<TextStyle | null>(null);
+  const textStyle = useMemo(() => {
+    if (stylePicked) return stylePicked;
+    try {
+      return normalizeTextStyle(savedStyle ? JSON.parse(savedStyle) : null);
+    } catch {
+      return DEFAULT_TEXT_STYLE;
+    }
+  }, [stylePicked, savedStyle]);
+  function pickStyle(patch: Partial<TextStyle>) {
+    const next = normalizeTextStyle({ ...textStyle, ...patch });
+    setStylePicked(next);
+    writeLocal(STYLE_STORE, JSON.stringify(next));
+  }
   const [view, setView] = useState<"mobile" | "pc">("mobile"); // 미리보기 폭 (블로그 방문자 대부분 모바일)
   // 자연어 수정: 요청 → AI가 해당 부분만 고침. history 로 한 단계씩 되돌리기
   const [revText, setRevText] = useState("");
@@ -404,7 +432,7 @@ export default function StudioClient({
     try {
       // 네이버 에디터는 붙여넣기로 이미지를 받지 않아, 이미지 대신 [사진N]·[그림N] 자리 표시를 남긴다
       // (사진은 '📦 한 번에 저장'으로 받아 그 자리에 끌어다 놓기)
-      const html = toEditorHtml(body, { photos: [], figures: [], center });
+      const html = toEditorHtml(body, { photos: [], figures: [], center, style: textStyle });
       await navigator.clipboard.write([
         new ClipboardItem({
           "text/html": new Blob([html], { type: "text/html" }),
@@ -811,7 +839,7 @@ export default function StudioClient({
                 {live?.body ? `${live.body.replace(/\*\*/g, "").length}자` : "글 구성을 준비하고 있어요"}
               </p>
               {live?.body ? (
-                <Preview title={live.title} body={live.body} photos={[]} figures={[]} center={center} view={view} />
+                <Preview title={live.title} body={live.body} photos={[]} figures={[]} center={center} view={view} textStyle={textStyle} />
               ) : (
                 <div className="grid min-h-60 place-items-center rounded-2xl bg-white p-8 text-sm text-ink-soft ring-1 ring-line">
                   <span className="animate-pulse">곧 글이 나타납니다…</span>
@@ -914,6 +942,7 @@ export default function StudioClient({
                       figures={figures}
                       center={center}
                       view={view}
+                      textStyle={textStyle}
                       changed={revising ? undefined : (changed ?? undefined)}
                     />
                     {changed && changed.size > 0 && !revising && (
@@ -951,6 +980,7 @@ export default function StudioClient({
                       {copied === "본문" ? "복사됨 ✓" : "텍스트만 복사"}
                     </button>
                   </div>
+                  <TextStyleControls value={textStyle} onChange={pickStyle} />
                   {imageCount > 0 && (
                     <button
                       type="button"
@@ -1515,6 +1545,7 @@ function Preview({
   figures,
   center,
   view,
+  textStyle,
   changed,
 }: {
   title: string;
@@ -1523,12 +1554,17 @@ function Preview({
   figures: FigureState[];
   center: boolean;
   view: "mobile" | "pc";
+  textStyle: TextStyle;
   /** 방금 고친 줄 번호 (노란 배경) */
   changed?: Set<number>;
 }) {
   const S = BLOG_STYLE;
+  const thanksFont = textStyle.thanksHand ? fontStack(THANKS_FONT) ?? undefined : undefined;
+  const faces = fontFaceCss([textStyle.font, ...(textStyle.thanksHand ? [THANKS_FONT] : [])]);
   return (
     <div className={`overflow-auto rounded-lg bg-[#f5f6f8] p-3 ${view === "pc" ? "max-h-[80vh]" : "max-h-[40rem]"}`}>
+      {/* 네이버 에디터와 같은 글꼴 파일 (고른 글씨체만 내려받음) */}
+      {faces && <style>{faces}</style>}
       <article
         className="mx-auto bg-white shadow-sm ring-1 ring-black/5"
         style={{
@@ -1546,7 +1582,13 @@ function Preview({
         </header>
         <div
           className={view === "mobile" ? "px-4 py-6" : "px-8 py-8"}
-          style={{ fontSize: S.fontSize, lineHeight: S.lineHeight, color: S.bodyColor, textAlign: center ? "center" : "left" }}
+          style={{
+            fontSize: textStyle.fontSize,
+            fontFamily: fontStack(textStyle.font) ?? undefined,
+            lineHeight: S.lineHeight,
+            color: S.bodyColor,
+            textAlign: center ? "center" : "left",
+          }}
         >
           {parseBody(body).map((b, i) => {
             const el = renderBlock(b, i);
@@ -1611,10 +1653,43 @@ function Preview({
           );
         }
         return (
-          <p key={i}>
+          <p key={i} style={b.role === "thanks" && thanksFont ? { fontFamily: thanksFont } : undefined}>
             <Spans spans={b.spans} strong={b.role ? S.strongColor : undefined} />
           </p>
         );
     }
   }
+}
+
+/** 글씨 크기·글씨체 고르기 (네이버 에디터 메뉴에 있는 값만) */
+function TextStyleControls({ value, onChange }: { value: TextStyle; onChange: (patch: Partial<TextStyle>) => void }) {
+  const sel = "rounded-lg border border-line bg-white px-2 py-1 text-xs font-bold text-ink";
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-xl bg-bg-soft px-3 py-2 text-xs text-ink-soft">
+      <label className="flex items-center gap-1.5">
+        글씨 크기
+        <select className={sel} value={value.fontSize} onChange={(e) => onChange({ fontSize: Number(e.target.value) })}>
+          {NAVER_SIZES.map((s) => (
+            <option key={s.px} value={s.px}>
+              {s.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="flex items-center gap-1.5">
+        글씨체
+        <select className={sel} value={value.font} onChange={(e) => onChange({ font: e.target.value as FontId })}>
+          {NAVER_FONTS.map((f) => (
+            <option key={f.id} value={f.id}>
+              {f.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="flex items-center gap-1.5">
+        <input type="checkbox" checked={value.thanksHand} onChange={(e) => onChange({ thanksHand: e.target.checked })} />
+        끝인사 &ldquo;감사합니다&rdquo; 손글씨체
+      </label>
+    </div>
+  );
 }

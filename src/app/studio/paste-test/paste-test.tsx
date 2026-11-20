@@ -20,6 +20,13 @@ const SAMPLE = `안녕하세요
 
 [사진1]`;
 
+/** 끝인사 시험용 (실제 글 끝과 같은 모양: "감사합니다" 뒤에 연락처) */
+const OUTRO = `오늘도 읽어 주셔서 고맙습니다.
+
+" 감사합니다 "
+
+📞 시험용 연락처 줄`;
+
 type Test = { id: string; label: string; desc: string; text?: string; make: (ctx: Ctx) => Promise<string> | string };
 /** 배포 사이트의 공개 이미지 (내 PC에서 열어도 https 주소로 시험) */
 const HTTPS_IMAGE = "https://smartenglish-kappa.vercel.app/og.png";
@@ -74,6 +81,26 @@ const TESTS: Test[] = [
     desc: "지도 주소 한 줄 (지도·링크 카드로 바뀌는지)",
     text: "(지도 시험 G)",
     make: ({ placeUrl }) => `<p style="text-align:center;" align="center"><a href="${placeUrl}">${placeUrl}</a></p>`,
+  },
+  {
+    id: "size",
+    label: "H. 글씨 크기 19",
+    desc: "본문 글씨가 19 크기로 붙는지 (에디터 글씨 크기 칸에 19가 보이면 성공)",
+    make: () => toEditorHtml(SAMPLE, { photos: [], figures: [], center: true, align: "all", style: { fontSize: 19, font: "default", thanksHand: false } }),
+  },
+  {
+    id: "font",
+    label: "I. 글씨체 나눔명조",
+    desc: "본문이 나눔명조로 붙는지 (에디터 글씨체 칸에 나눔명조가 보이면 성공)",
+    make: () =>
+      toEditorHtml(SAMPLE, { photos: [], figures: [], center: true, align: "all", style: { fontSize: 16, font: "nanummyeongjo", thanksHand: false } }),
+  },
+  {
+    id: "thanks",
+    label: "J. 끝인사 손글씨",
+    desc: "“감사합니다” 줄만 손글씨체(다시시작해)로 붙는지",
+    text: OUTRO,
+    make: () => toEditorHtml(OUTRO, { photos: [], figures: [], center: true, align: "all", style: { fontSize: 16, font: "default", thanksHand: true } }),
   },
 ];
 

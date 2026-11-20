@@ -1,4 +1,4 @@
-import { BLOG_STYLE as S } from "./blog-style";
+import { BLOG_STYLE as S, DEFAULT_TEXT_STYLE, THANKS_FONT, fontStack, type FontId, type TextStyle } from "./blog-style";
 
 /**
  * 초안 본문 서식 표시 → 화면 미리보기 / 네이버 에디터 붙여넣기용 HTML / 순수 텍스트.
@@ -119,19 +119,22 @@ export function toPlainText(body: string): string {
 
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
-/** 글자 색·굵기·크기 (붙여넣기 후에도 유지되는 인라인 서식 — 에디터 기본 크기는 15px이라 16px을 글자마다 지정) */
-const bold = (inner: string, color: string) => `<span style="color:${color};font-size:${S.fontSize}px;"><b>${inner}</b></span>`;
-
-/** 색만 입힌 글자 — 바깥 div 의 color 는 에디터가 버릴 수 있어 글자마다 색을 단다 (원장님 글도 같은 방식) */
-const tint = (inner: string, color: string) => `<span style="color:${color};font-size:${S.fontSize}px;">${inner}</span>`;
-
-function spansHtml(spans: Span[], baseColor: string, baseBold: boolean) {
-  return spans
-    .map((s) =>
-      s.key ? bold(esc(s.text), S.keywordColor) : baseBold ? bold(esc(s.text), baseColor) : tint(esc(s.text), baseColor),
-    )
-    .join("");
+/**
+ * 글자 서식 (붙여넣기 후에도 유지되는 인라인 서식 — 에디터 기본 크기는 15px이라 크기를 글자마다 지정).
+ * 바깥 div 의 color 는 에디터가 버릴 수 있어 글자마다 색을 단다 (원장님 글도 같은 방식).
+ * 글씨체는 '기본서체'가 아니면 글자마다 font-family 를 단다.
+ */
+function inlineFmt(size: number, font: FontId) {
+  const ff = fontStack(font, true);
+  const css = (color: string, f = ff) => `color:${color};font-size:${size}px;${f ? `font-family:${f};` : ""}`;
+  return {
+    bold: (inner: string, color: string, f?: string | null) => `<span style="${css(color, f === undefined ? ff : f)}"><b>${inner}</b></span>`,
+    tint: (inner: string, color: string, f?: string | null) => `<span style="${css(color, f === undefined ? ff : f)}">${inner}</span>`,
+  };
 }
+
+/** 줄별 글씨체 이름(스마트에디터 클래스 se-ff-…): 기본서체는 원장님 글과 같은 빈 값 */
+const seFont = (font: FontId) => (font === "default" ? "" : font);
 
 /**
  * 가운데 정렬을 넣는 방식 (스마트에디터가 어느 것을 받는지 붙여넣기 시험 페이지로 확인):
@@ -156,6 +159,7 @@ export function toEditorHtml(
     center,
     align: mode = DEFAULT_ALIGN_MODE,
     allowHttpsImages = false,
+    style = DEFAULT_TEXT_STYLE,
   }: {
     photos: (string | undefined)[];
     figures: (string | undefined)[];
@@ -163,15 +167,25 @@ export function toEditorHtml(
     align?: AlignMode;
     /** 붙여넣기 시험용: https 이미지 주소도 허용 */
     allowHttpsImages?: boolean;
+    /** 글씨 크기·글씨체·끝인사 손글씨 */
+    style?: TextStyle;
   },
 ): string {
+  const size = style.fontSize;
+  const { bold, tint } = inlineFmt(size, style.font);
+  const spansHtml = (spans: Span[], baseColor: string, baseBold: boolean) =>
+    spans
+      .map((s) =>
+        s.key ? bold(esc(s.text), S.keywordColor) : baseBold ? bold(esc(s.text), baseColor) : tint(esc(s.text), baseColor),
+      )
+      .join("");
   const useStyle = center && (mode === "style" || mode === "all");
   const useAttr = center && (mode === "attr" || mode === "all");
   const useSe = mode === "se" || mode === "all";
   const pClass = useSe ? ` class="se-text-paragraph se-text-paragraph-align-${center ? "center" : "left"}"` : "";
-  const p = (inner: string) =>
+  const p = (inner: string, font: FontId = style.font) =>
     `<p${pClass}${useAttr ? ' align="center"' : ""}${useStyle ? ' style="text-align:center;"' : ""}>${
-      useSe ? `<span class="se-fs-fs${S.fontSize} se-ff-">${inner}</span>` : inner
+      useSe ? `<span class="se-fs-fs${size} se-ff-${seFont(font)}">${inner}</span>` : inner
     }</p>`;
   // 이미지는 이 화면이 만든 data URL(JPEG/PNG/WebP base64)만 넣는다 (시험 페이지는 https 주소도)
   const safe = (src: string | undefined) =>
@@ -200,6 +214,8 @@ export function toEditorHtml(
           if (b.role === "greeting-name") {
             return p(`${bold("스마트해법영어 백운밸리점", S.nameColor)}${tint(esc(b.text.replace(/^스마트해법영어 백운밸리점/, "")), S.bodyColor)}`);
           }
+          // 끝인사 "감사합니다": 원장님처럼 손글씨체(다시시작해)
+          if (b.role === "thanks" && style.thanksHand) return p(bold(esc(b.text), S.strongColor, fontStack(THANKS_FONT, true)), THANKS_FONT);
           if (b.role) return p(bold(esc(b.text), S.strongColor));
           return p(spansHtml(b.spans, S.bodyColor, false));
       }
@@ -208,7 +224,8 @@ export function toEditorHtml(
   const wrapped = useSe
     ? `<div class="se-component se-text se-l-default"><div class="se-component-content"><div class="se-section se-section-text se-l-default"><div class="se-module se-module-text">${html}</div></div></div></div>`
     : html;
-  return `<div style="font-size:${S.fontSize}px;line-height:${S.lineHeight};color:${S.bodyColor};">${wrapped}</div>`;
+  const ff = fontStack(style.font, true);
+  return `<div style="font-size:${size}px;line-height:${S.lineHeight};color:${S.bodyColor};${ff ? `font-family:${ff};` : ""}">${wrapped}</div>`;
 }
 
 /**
