@@ -7,13 +7,14 @@ import { BLOG_STYLE as S, DEFAULT_TEXT_STYLE, THANKS_FONT, fontStack, type FontI
  * 브라우저·서버 공용 (server-only 아님).
  */
 
-/** 한 줄 안의 조각: 일반 글자 / 핵심 키워드(굵게+강조색) */
-export type Span = { text: string; key?: boolean };
+/** 한 줄 안의 조각: 일반 글자 / 핵심 키워드(굵게+강조색) / 핵심 문장(굵게+밑줄) */
+export type Span = { text: string; key?: boolean; under?: boolean };
 
 export type Block =
   | { kind: "heading"; text: string }
   | { kind: "quote"; text: string; spans: Span[] }
-  | { kind: "text"; text: string; spans: Span[]; role?: "greeting-name" | "thanks" | "contact" }
+  /** italic: 따옴표로 감싼 한 줄(아이·학부모의 말, 던지는 질문) — 원장님 글처럼 굵은 기울임 */
+  | { kind: "text"; text: string; spans: Span[]; role?: "greeting-name" | "thanks" | "contact"; italic?: boolean }
   | { kind: "blank" }
   | { kind: "photo"; n: number }
   | { kind: "figure"; n: number; desc: string };
@@ -21,11 +22,15 @@ export type Block =
 const PHOTO = /^\[사진\s*(\d+)\]$/;
 const FIGURE = /^\[그림\s*[:：]\s*(.+?)\s*\]$/;
 
-/** 강조 한 쌍: 한 줄 안에서 ** 바로 안쪽이 공백이 아닌 구절 */
-const PAIR = /\*\*(?=\S)([^*\n]*?\S)\*\*/g;
+/**
+ * 강조 한 쌍 (한 줄 안에서 표시 바로 안쪽이 공백이 아닌 구절):
+ * **키워드** → 굵게+강조색, __핵심 문장__ → 굵게+밑줄 (원장님 글의 밑줄 강조)
+ */
+const PAIR = /\*\*(?=\S)([^*\n]*?\S)\*\*|__(?=\S)([^_\n]*?\S)__/g;
+const UNDER_PAIR = /__(?=\S)([^_\n]*?\S)__/g;
 
 /**
- * "**키워드**" 표시를 조각으로. 짝이 맞는 것만 강조로 쓰고,
+ * 강조 표시를 조각으로. 짝이 맞는 것만 강조로 쓰고,
  * 짝 없이 남은 ** 는 AI가 흘린 표시로 보고 지운다 (블로그 글에 별표 두 개를 그대로 쓸 일은 없음).
  */
 export function parseInline(line: string): Span[] {
@@ -34,7 +39,7 @@ export function parseInline(line: string): Span[] {
   for (const m of line.matchAll(PAIR)) {
     const before = stripMarks(line.slice(last, m.index));
     if (before) out.push({ text: before });
-    out.push({ text: m[1], key: true });
+    out.push(m[1] !== undefined ? { text: m[1], key: true } : { text: stripMarks(m[2]), under: true });
     last = m.index + m[0].length;
   }
   const rest = stripMarks(line.slice(last));
@@ -43,8 +48,11 @@ export function parseInline(line: string): Span[] {
 }
 
 function stripMarks(s: string) {
-  return s.replace(/\*\*/g, "");
+  return s.replace(UNDER_PAIR, "$1").replace(/\*\*/g, "");
 }
+
+/** 따옴표로 시작하고 끝나는 한 줄 (“…” 또는 "…") — 아이·학부모의 말, 던지는 질문 */
+const QUOTED_LINE = /^[“"].*[”"]$/;
 
 const THANKS = /^"\s*감사합니다\s*"$/;
 
@@ -90,7 +98,9 @@ export function parseBody(body: string): Block[] {
       const text = line.replace(/^>\s?/, "");
       return { kind: "quote", text: stripMarks(text), spans: parseInline(text) };
     }
-    return { kind: "text", text: stripMarks(line), spans: parseInline(line), role: roleOf(line, i, outroFrom) };
+    const role = roleOf(line, i, outroFrom);
+    const text = stripMarks(line);
+    return { kind: "text", text, spans: parseInline(line), role, ...(!role && QUOTED_LINE.test(text) && text.length > 2 ? { italic: true } : {}) };
   });
 }
 
@@ -173,11 +183,17 @@ export function toEditorHtml(
 ): string {
   const size = style.fontSize;
   const { bold, tint } = inlineFmt(size, style.font);
-  const spansHtml = (spans: Span[], baseColor: string, baseBold: boolean) =>
+  // 기울임·밑줄은 태그와 인라인 스타일을 함께 (에디터가 어느 쪽을 받든 남도록)
+  const it = (s: string) => `<i style="font-style:italic;">${s}</i>`;
+  const ul = (s: string) => `<u style="text-decoration:underline;">${s}</u>`;
+  const spansHtml = (spans: Span[], baseColor: string, baseBold: boolean, italic = false) =>
     spans
-      .map((s) =>
-        s.key ? bold(esc(s.text), S.keywordColor) : baseBold ? bold(esc(s.text), baseColor) : tint(esc(s.text), baseColor),
-      )
+      .map((s) => {
+        const t = italic ? it(esc(s.text)) : esc(s.text);
+        if (s.key) return bold(t, S.keywordColor);
+        if (s.under) return bold(ul(t), S.strongColor);
+        return baseBold ? bold(t, baseColor) : tint(t, baseColor);
+      })
       .join("");
   const useStyle = center && (mode === "style" || mode === "all");
   const useAttr = center && (mode === "attr" || mode === "all");
@@ -201,7 +217,7 @@ export function toEditorHtml(
         case "heading":
           return p(bold(esc(b.text), S.headingColor));
         case "quote":
-          return p(spansHtml(b.spans, S.strongColor, true));
+          return p(spansHtml(b.spans, S.strongColor, true, true)); // 원장님 글: 인용은 굵은 기울임
         case "photo": {
           const src = safe(photos[b.n - 1]);
           return src ? img(src) : p(tint(`[사진${b.n}]`, S.bodyColor));
@@ -217,7 +233,8 @@ export function toEditorHtml(
           // 끝인사 "감사합니다": 원장님처럼 손글씨체(다시시작해)
           if (b.role === "thanks" && style.thanksHand) return p(bold(esc(b.text), S.strongColor, fontStack(THANKS_FONT, true)), THANKS_FONT);
           if (b.role) return p(bold(esc(b.text), S.strongColor));
-          return p(spansHtml(b.spans, S.bodyColor, false));
+          // 따옴표로 감싼 한 줄(아이·학부모의 말, 질문): 굵은 기울임
+          return p(b.italic ? spansHtml(b.spans, S.bodyColor, true, true) : spansHtml(b.spans, S.bodyColor, false));
       }
     })
     .join("");

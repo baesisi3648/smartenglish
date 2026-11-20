@@ -1514,12 +1514,16 @@ function Planner({
 }
 
 /** 핵심 키워드(**…**)를 블로그처럼 굵은 강조색으로 */
-function Spans({ spans, strong }: { spans: Span[]; strong?: string }) {
+function Spans({ spans, strong, italic }: { spans: Span[]; strong?: string; italic?: boolean }) {
   return (
-    <>
+    <span style={italic ? { fontStyle: "italic" } : undefined}>
       {spans.map((s, k) =>
         s.key ? (
           <b key={k} style={{ color: BLOG_STYLE.keywordColor }}>
+            {s.text}
+          </b>
+        ) : s.under ? (
+          <b key={k} style={{ color: BLOG_STYLE.strongColor, textDecoration: "underline" }}>
             {s.text}
           </b>
         ) : strong ? (
@@ -1530,7 +1534,7 @@ function Spans({ spans, strong }: { spans: Span[]; strong?: string }) {
           <span key={k}>{s.text}</span>
         ),
       )}
-    </>
+    </span>
   );
 }
 
@@ -1618,7 +1622,7 @@ function Preview({
       case "quote":
         return (
           <p key={i}>
-            <Spans spans={b.spans} strong={S.strongColor} />
+            <Spans spans={b.spans} strong={S.strongColor} italic />
           </p>
         );
       case "photo": {
@@ -1654,7 +1658,7 @@ function Preview({
         }
         return (
           <p key={i} style={b.role === "thanks" && thanksFont ? { fontFamily: thanksFont } : undefined}>
-            <Spans spans={b.spans} strong={b.role ? S.strongColor : undefined} />
+            <Spans spans={b.spans} strong={b.role ? S.strongColor : b.italic ? S.bodyColor : undefined} italic={b.italic} />
           </p>
         );
     }
