@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import type { PostType } from "@/studio/post-types";
 import type { Plan, PlanIdea, TypeStat } from "@/studio/planner";
+import type { QuickIdea } from "@/studio/quick-ideas";
 import { figuresOf, parseBody, toEditorHtml, toPlainText } from "@/studio/format";
 import { DEFAULT_OPENAI_MODEL, MAX_AI_IMAGES, OPENAI_KEY_PATTERN, OPENAI_MODELS } from "@/studio/openai-models";
 
@@ -96,11 +97,14 @@ const REVISE_PRESETS = ["전체를 조금 더 짧게", "더 따뜻하고 부드�
 const AGENT_KEY = "hb-studio-agent";
 
 export default function StudioClient({
+  ideas,
   agents,
   postTypes,
   keywordGroups,
   logout,
 }: {
+  /** 추천 주제 (학사 시기·최근 글 공백으로 즉시 계산) */
+  ideas: QuickIdea[];
   agents: AgentInfo[];
   postTypes: PostType[];
   keywordGroups: { label: string; items: string[] }[];
@@ -135,6 +139,9 @@ export default function StudioClient({
   // null = 아직 고르지 않음 → 글 유형의 기본 키워드 사용
   const [kwPicked, setKwPicked] = useState<string[] | null>(null);
   const [topic, setTopic] = useState("");
+  const [ideaPicked, setIdeaPicked] = useState<string | null>(null);
+  /** 주제 없이 바로 쓸 맞춤 추천: 원장님께 받을 사실이 없는 첫 추천 */
+  const todayPick = ideas.find((i) => i.needs.length === 0);
   const [files, setFiles] = useState<File[]>([]);
   const [consent, setConsent] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -464,13 +471,38 @@ export default function StudioClient({
                 원장님이 따로 적지 않아도, 교습소 수업 방식·과정 같은 <b>확인된 정보</b>와 지금 시기에 맞는 교육
                 이야기로 그대로 올릴 수 있는 글을 씁니다. 주제도 AI가 최근 글과 겹치지 않게 정합니다.
               </p>
+              {todayPick && (
+                <div className="mt-3 rounded-xl bg-white/10 p-3">
+                  <p className="text-[11px] font-bold text-hb-yellow">오늘의 맞춤 추천</p>
+                  <p className="mt-0.5 font-extrabold">{todayPick.title}</p>
+                  <p className="mt-0.5 text-[11px] leading-4 text-white/70">{todayPick.reason}</p>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      autoWrite({
+                        type: todayPick.type,
+                        topic: [todayPick.title, ...todayPick.outline].join("\n"),
+                        keywords: todayPick.keywords,
+                      })
+                    }
+                    disabled={loading}
+                    className="mt-2 w-full rounded-full bg-hb-yellow py-3 text-sm font-extrabold text-ink disabled:opacity-60"
+                  >
+                    {loading ? `${selectedAgent.label}가 글을 쓰는 중…` : "⚡ 이 주제로 바로 쓰기"}
+                  </button>
+                </div>
+              )}
               <button
                 type="button"
                 onClick={() => autoWrite()}
                 disabled={loading}
-                className="mt-3 w-full rounded-full bg-hb-yellow py-3 text-sm font-extrabold text-ink disabled:opacity-60"
+                className={
+                  todayPick
+                    ? "mt-2 w-full rounded-full border-2 border-white/40 py-2.5 text-sm font-bold text-white disabled:opacity-60"
+                    : "mt-3 w-full rounded-full bg-hb-yellow py-3 text-sm font-extrabold text-ink disabled:opacity-60"
+                }
               >
-                {loading ? `${selectedAgent.label}가 글을 쓰는 중…` : "⚡ 알아서 한 편 쓰기"}
+                {loading ? `${selectedAgent.label}가 글을 쓰는 중…` : todayPick ? "주제도 AI에게 맡기기" : "⚡ 알아서 한 편 쓰기"}
               </button>
               <p className="mt-2 text-[11px] leading-4 text-white/60">
                 성적·인원·이벤트·날짜 같은 사실은 넣지 않습니다. 그런 소식은 아래 3번 칸에 적어서 만들어 주세요.
@@ -506,6 +538,41 @@ export default function StudioClient({
             </Card>
 
             <Card title="3. 주제 및 내용 · 요청사항">
+              {ideas.length > 0 && (
+                <div className="rounded-xl bg-bg-soft p-3">
+                  <p className="text-sm font-bold text-hb-navy">💡 추천 주제 — 누르면 아래 칸이 채워져요</p>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {ideas.map((idea) => (
+                      <button
+                        key={idea.id}
+                        type="button"
+                        aria-pressed={ideaPicked === idea.id}
+                        onClick={() => {
+                          setIdeaPicked(idea.id);
+                          applyIdea(idea);
+                        }}
+                        className={`rounded-full border px-3 py-1.5 text-left text-[13px] font-bold transition ${
+                          ideaPicked === idea.id
+                            ? "border-hb-navy bg-hb-navy text-white"
+                            : "border-line bg-white text-ink hover:border-hb-blue"
+                        }`}
+                      >
+                        {postTypes.find((t) => t.id === idea.type)?.emoji} {idea.title}
+                      </button>
+                    ))}
+                  </div>
+                  {(() => {
+                    const cur = ideas.find((i) => i.id === ideaPicked);
+                    return (
+                      <p className="mt-2 text-xs leading-5 text-ink-soft">
+                        {cur
+                          ? `${cur.reason}${cur.needs.length ? " · 아래 [실제 사실] 칸을 채우면 그 내용만 글에 들어갑니다." : ""}`
+                          : "다가오는 학사 시기와 블로그에 오래 안 올라온 글 종류를 보고 골랐습니다."}
+                      </p>
+                    );
+                  })()}
+                </div>
+              )}
               <Input
                 id="topic-input"
                 label="무엇에 대한 글인지, 넣고 싶은 내용과 요청사항을 자유롭게 적어 주세요"
