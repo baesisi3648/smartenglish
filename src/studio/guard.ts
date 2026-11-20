@@ -1,12 +1,14 @@
 import "server-only";
-import { ACP_AGENTS, DEEPSEEK_AGENT, GEMINI_AGENT, OPENAI_AGENT, type AgentDef } from "./agents";
+import { ACP_AGENTS, DEEPSEEK_AGENT, GEMINI_AGENT, GPT_TRIAL_AGENT, OPENAI_AGENT, type AgentDef } from "./agents";
 import { deepseekConfigured } from "./deepseek-api";
 import { geminiConfigured } from "./gemini-api";
+import { openaiTrialConfigured } from "./openai-api";
 
 /**
  * 스튜디오에서 쓸 수 있는 AI:
  * - ChatGPT·Claude(ACP): 원장 PC에서만. `npm run studio` 가 STUDIO_ENABLED=1 을 설정하고, Vercel에서는 항상 꺼짐.
  * - Gemini·DeepSeek(웹): 서버에 해당 API 키가 있으면 어디서나 (배포 사이트 웹 데모).
+ * - GPT 체험: 서버에 OPENAI_API_KEY 가 있으면 어디서나, 하루 10회까지.
  * - GPT(내 API 키): 원장님이 화면에 키를 넣으면 어디서나 (BYOK — 서버 키 불필요).
  */
 export function localAgentsEnabled() {
@@ -17,6 +19,7 @@ export function localAgentsEnabled() {
 
 export function availableAgents(): AgentDef[] {
   return [
+    ...(openaiTrialConfigured() ? [GPT_TRIAL_AGENT] : []),
     OPENAI_AGENT,
     ...(localAgentsEnabled() ? Object.values(ACP_AGENTS) : []),
     ...(geminiConfigured() ? [GEMINI_AGENT] : []),
@@ -97,4 +100,31 @@ export function takeApiQuota(client: string) {
   usage.set(client, recent);
   total.push(now);
   return true;
+}
+
+/**
+ * GPT 체험(서버 OpenAI 키) 하루 사용량: 한국 날짜 기준 전체 합계 TRIAL_PER_DAY 건.
+ * 한계: 프로세스 메모리라 Vercel 인스턴스가 새로 뜨면 0부터 다시 센다 → OpenAI 콘솔의 프로젝트 월 한도도 함께 설정할 것.
+ */
+export const TRIAL_PER_DAY = 10;
+let trialDay = "";
+let trialUsed = 0;
+
+const kstDay = () => new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+/** 1회 차감. 남은 횟수(차감 후)를 돌려주고, 이미 다 썼으면 -1 */
+export function takeTrialQuota() {
+  const day = kstDay();
+  if (day !== trialDay) {
+    trialDay = day;
+    trialUsed = 0;
+  }
+  if (trialUsed >= TRIAL_PER_DAY) return -1;
+  trialUsed += 1;
+  return TRIAL_PER_DAY - trialUsed;
+}
+
+/** AI 호출이 실패하면 차감한 1회를 돌려준다 (같은 날일 때만) */
+export function refundTrialQuota() {
+  if (trialDay === kstDay() && trialUsed > 0) trialUsed -= 1;
 }

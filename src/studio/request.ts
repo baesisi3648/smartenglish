@@ -8,8 +8,8 @@ import { runDeepseek } from "./deepseek-api";
 import { AgentError, redactSecrets } from "./errors";
 import { runGemini } from "./gemini-api";
 import { DEFAULT_OPENAI_MODEL, OPENAI_KEY_PATTERN, isOpenAIModel } from "./openai-models";
-import { runOpenAI } from "./openai-api";
-import { availableAgents, isTrustedStudioRequest, studioEnabled, takeApiQuota } from "./guard";
+import { openaiTrialKey, runOpenAI } from "./openai-api";
+import { TRIAL_PER_DAY, availableAgents, isTrustedStudioRequest, refundTrialQuota, studioEnabled, takeApiQuota, takeTrialQuota } from "./guard";
 
 /** 스튜디오 API 라우트(초안·글 추천) 공통: 요청 검사, AI 실행, 오류 응답 */
 
@@ -29,7 +29,8 @@ export function checkStudioRequest(req: NextRequest) {
 }
 
 /**
- * GPT(내 API 키, BYOK): 원장님이 화면에 넣은 키만 쓴다. 서버에는 OpenAI 키를 두지 않는다.
+ * GPT(내 API 키, BYOK): 원장님이 화면에 넣은 키를 쓴다.
+ * (서버 OpenAI 키는 "GPT 체험" 전용 — 하루 10회 제한, AI 그림 불가)
  * 키는 헤더로만 받는다 (URL·본문·로그에 남지 않게).
  */
 export type Byok = { apiKey: string; model: string };
@@ -63,8 +64,17 @@ export function readByok(req: NextRequest): Byok | null {
 export function checkQuota(req: NextRequest, { def }: ResolvedAgent) {
   if (def.kind !== "api") return null;
   const client = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || req.headers.get("x-real-ip") || "local";
-  if (takeApiQuota(client)) return null;
-  return fail(429, "RATE_LIMITED", "1시간 동안 쓸 수 있는 AI 요청 수(20건)를 넘었습니다. 잠시 뒤 다시 시도해 주세요.");
+  if (!takeApiQuota(client)) {
+    return fail(429, "RATE_LIMITED", "1시간 동안 쓸 수 있는 AI 요청 수(20건)를 넘었습니다. 잠시 뒤 다시 시도해 주세요.");
+  }
+  if (def.id === "gpt" && takeTrialQuota() < 0) {
+    return fail(
+      429,
+      "DAILY_LIMIT",
+      `오늘 GPT 체험 ${TRIAL_PER_DAY}회를 모두 썼습니다. 내일 다시 쓰거나, 'GPT (내 API 키)' 또는 다른 AI를 골라 주세요.`,
+    );
+  }
+  return null;
 }
 
 /** AI 1회 실행. 출력에 서버 비밀값이 섞여 나오는 경우(프롬프트 주입 등) 대비해 가린 뒤 돌려준다 */
@@ -74,6 +84,15 @@ export async function runModel(
   images: PromptImage[],
   signal: AbortSignal,
 ) {
+  if (def.id === "gpt") {
+    try {
+      const run = await runOpenAI(buildPrompt(true), images, { apiKey: openaiTrialKey(), model: DEFAULT_OPENAI_MODEL, signal });
+      return { text: redactSecrets(run.text), imagesSent: run.imagesSent };
+    } catch (e) {
+      refundTrialQuota(); // 실패한 요청은 하루 횟수에서 빼지 않는다
+      throw e;
+    }
+  }
   const run =
     def.kind === "acp"
       ? await runAgent(def.id, buildPrompt, images, { signal })

@@ -2,9 +2,16 @@ import "server-only";
 import { AgentError } from "./errors";
 
 /**
- * GPT(내 API 키) — OpenAI Responses API(글) / Image API(그림).
+ * GPT(내 API 키) / GPT 체험(서버 키, 하루 10회) — OpenAI Responses API(글) / Image API(그림).
  * 키는 요청마다 화면에서 받아 OpenAI로 전달만 한다. 저장·로그 금지 (오류 진단 문자열도 redactSecrets 를 거친다).
  */
+
+/** GPT 체험용 서버 키 (OPENAI_API_KEY). 형식이 맞을 때만 체험 메뉴를 켠다 */
+export function openaiTrialKey() {
+  const k = process.env.OPENAI_API_KEY?.trim() ?? "";
+  return /^sk-[A-Za-z0-9_-]{20,200}$/.test(k) ? k : "";
+}
+export const openaiTrialConfigured = () => !!openaiTrialKey();
 
 const RESPONSES = "https://api.openai.com/v1/responses";
 const IMAGES = "https://api.openai.com/v1/images/generations";

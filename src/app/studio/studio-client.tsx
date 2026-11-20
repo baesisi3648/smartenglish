@@ -109,7 +109,7 @@ export default function StudioClient({
   const saved = useSyncExternalStore(noopSubscribe, () => readLocal(AGENT_KEY), () => null);
   const [picked, setPicked] = useState<string | null>(null);
   // 기본: PC에서는 ChatGPT(구독), 웹에서는 GPT(내 API 키)
-  const fallback = agents.find((a) => a.id === "chatgpt")?.id ?? agents.find((a) => a.id === "openai")?.id ?? agents[0].id;
+  const fallback = agents.find((a) => a.id === "chatgpt")?.id ?? agents.find((a) => a.id === "gpt")?.id ?? agents.find((a) => a.id === "openai")?.id ?? agents[0].id;
   const agent = picked ?? (saved && agents.some((a) => a.id === saved) ? saved : fallback);
 
   // GPT(내 API 키): 키·모델은 이 브라우저에만 저장 (null = 아직 화면에서 바꾸지 않음 → 저장값 사용)
