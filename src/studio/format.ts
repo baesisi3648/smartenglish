@@ -134,18 +134,50 @@ function spansHtml(spans: Span[], baseColor: string, baseBold: boolean) {
 }
 
 /**
+ * 가운데 정렬을 넣는 방식 (스마트에디터가 어느 것을 받는지 붙여넣기 시험 페이지로 확인):
+ * - style: <p style="text-align:center">  (일반 웹 방식)
+ * - attr:  <p align="center">  (옛 HTML 속성)
+ * - se:    스마트에디터 자체 구조(se-text-paragraph-align-center 클래스) — 원장님 블로그 HTML과 같은 모양
+ * - all:   위 세 가지를 한 번에
+ */
+export type AlignMode = "style" | "attr" | "se" | "all";
+export const DEFAULT_ALIGN_MODE: AlignMode = "style";
+
+/**
  * 네이버 스마트에디터에 붙여넣을 HTML. 줄마다 <p> 하나 (에디터가 문단 단위로 받음).
- * photos[n-1] / figures[n-1] 에 data URL 이 있으면 그 자리에 이미지를 넣고, 없으면 [사진N]·[그림N] 글자를 남긴다.
+ * photos[n-1] / figures[n-1] 에 이미지 주소가 있으면 그 자리에 넣고, 없으면 [사진N]·[그림N] 글자를 남긴다.
  * 글자 서식은 원장님 블로그 실제 값(blog-style.ts): 16px, 본문 회색, 소제목 초록 굵게, 핵심 키워드 주황 굵게.
  */
 export function toEditorHtml(
   body: string,
-  { photos, figures, center }: { photos: (string | undefined)[]; figures: (string | undefined)[]; center: boolean },
+  {
+    photos,
+    figures,
+    center,
+    align: mode = DEFAULT_ALIGN_MODE,
+    allowHttpsImages = false,
+  }: {
+    photos: (string | undefined)[];
+    figures: (string | undefined)[];
+    center: boolean;
+    align?: AlignMode;
+    /** 붙여넣기 시험용: https 이미지 주소도 허용 */
+    allowHttpsImages?: boolean;
+  },
 ): string {
-  const align = center ? "text-align:center;" : "";
-  const p = (inner: string) => `<p style="${align}">${inner}</p>`;
-  // 이미지는 이 화면이 만든 data URL(JPEG/PNG/WebP base64)만 넣는다
-  const safe = (src: string | undefined) => (src && /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(src) ? src : undefined);
+  const useStyle = center && (mode === "style" || mode === "all");
+  const useAttr = center && (mode === "attr" || mode === "all");
+  const useSe = mode === "se" || mode === "all";
+  const pClass = useSe ? ` class="se-text-paragraph se-text-paragraph-align-${center ? "center" : "left"}"` : "";
+  const p = (inner: string) =>
+    `<p${pClass}${useAttr ? ' align="center"' : ""}${useStyle ? ' style="text-align:center;"' : ""}>${
+      useSe ? `<span class="se-fs-fs${S.fontSize} se-ff-">${inner}</span>` : inner
+    }</p>`;
+  // 이미지는 이 화면이 만든 data URL(JPEG/PNG/WebP base64)만 넣는다 (시험 페이지는 https 주소도)
+  const safe = (src: string | undefined) =>
+    src && (/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(src) || (allowHttpsImages && /^https:\/\/[^\s"'<>]+$/.test(src)))
+      ? src
+      : undefined;
   const img = (src: string) => p(`<img src="${esc(src)}" style="max-width:100%;" width="740" alt="">`);
   const html = parseBody(body)
     .map((b) => {
@@ -173,7 +205,10 @@ export function toEditorHtml(
       }
     })
     .join("");
-  return `<div style="font-size:${S.fontSize}px;line-height:${S.lineHeight};color:${S.bodyColor};">${html}</div>`;
+  const wrapped = useSe
+    ? `<div class="se-component se-text se-l-default"><div class="se-component-content"><div class="se-section se-section-text se-l-default"><div class="se-module se-module-text">${html}</div></div></div></div>`
+    : html;
+  return `<div style="font-size:${S.fontSize}px;line-height:${S.lineHeight};color:${S.bodyColor};">${wrapped}</div>`;
 }
 
 /**

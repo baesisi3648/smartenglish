@@ -9,6 +9,7 @@ import { fetchStream, type LiveFields } from "@/studio/stream-client";
 import { BLOG_STYLE } from "@/studio/blog-style";
 import { changedLines, figuresOf, parseBody, toEditorHtml, toPlainText, type Span } from "@/studio/format";
 import { DEFAULT_OPENAI_MODEL, MAX_AI_IMAGES, OPENAI_KEY_PATTERN, OPENAI_MODELS } from "@/studio/openai-models";
+import { makeZip } from "@/studio/zip";
 
 const noopSubscribe = () => () => {};
 /** 브라우저 저장값 읽기 (사생활 모드 등에서 실패하면 null) */
@@ -422,6 +423,53 @@ export default function StudioClient({
     }
   }
 
+  /**
+   * 사진·그림을 본문에 나오는 순서대로 이름 붙여 ZIP 하나로 저장 (01_사진2.jpg, 02_그림1.jpg …).
+   * 네이버 에디터는 붙여넣기로 사진을 받지 않으므로, [사진N] 자리에 같은 번호 파일을 끌어다 놓으면 된다.
+   * 본문에 자리가 없는 사진은 뒤에 '추가_사진N'으로 넣는다.
+   */
+  async function saveImages() {
+    if (!result) return;
+    setCopied("사진-준비");
+    try {
+      const files: { name: string; data: Uint8Array }[] = [];
+      const used = new Set<number>();
+      const extOf = (type: string) => (type.includes("png") ? "png" : type.includes("webp") ? "webp" : "jpg");
+      const add = async (label: string, src: string | undefined) => {
+        if (!src) return;
+        const blob = await (await fetch(src)).blob();
+        files.push({
+          name: `${String(files.length + 1).padStart(2, "0")}_${label}.${extOf(blob.type)}`,
+          data: new Uint8Array(await blob.arrayBuffer()),
+        });
+      };
+      for (const b of parseBody(body)) {
+        if (b.kind === "photo" && !used.has(b.n)) {
+          used.add(b.n);
+          await add(`사진${b.n}`, result.photos[b.n - 1]);
+        } else if (b.kind === "figure") {
+          const f = figureFor(figures, b.desc);
+          await add(`그림${b.n}`, f?.status === "done" ? f.src : undefined);
+        }
+      }
+      for (let n = 1; n <= result.photos.length; n++) if (!used.has(n)) await add(`추가_사진${n}`, result.photos[n - 1]);
+      if (files.length === 0) {
+        setCopied("");
+        return;
+      }
+      const url = URL.createObjectURL(makeZip(files));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `블로그사진_${new Date().toISOString().slice(0, 10)}.zip`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      flash("사진");
+    } catch {
+      setCopied("");
+    }
+  }
+
+  const imageCount = result ? result.photos.length + figures.filter((f) => f.status === "done").length : 0;
   const selectedAgent = agents.find((a) => a.id === agent)!;
   const tagText = result?.tags.map((t) => `#${t}`).join(" ") ?? "";
 
@@ -870,7 +918,7 @@ export default function StudioClient({
                       ? "복사됨 ✓ 네이버 글쓰기 본문에 붙여넣기(Ctrl+V) 하세요"
                       : copied === "에디터-준비"
                         ? "사진 준비 중…"
-                        : "📋 네이버 에디터용 복사 (서식 + 사진·그림 포함)"}
+                        : "📋 네이버 에디터용 복사 (글자 서식 포함)"}
                   </button>
                   <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                     <label className="flex items-center gap-1.5 text-ink-soft">
@@ -881,13 +929,54 @@ export default function StudioClient({
                       {copied === "본문" ? "복사됨 ✓" : "텍스트만 복사"}
                     </button>
                   </div>
+                  {imageCount > 0 && (
+                    <button
+                      type="button"
+                      onClick={saveImages}
+                      disabled={copied === "사진-준비"}
+                      className="w-full rounded-full border-2 border-hb-navy bg-white py-2.5 text-sm font-extrabold text-hb-navy disabled:opacity-60"
+                    >
+                      {copied === "사진"
+                        ? "저장됨 ✓ 압축을 풀고 [사진N] 자리에 같은 번호 파일을 끌어다 놓으세요"
+                        : copied === "사진-준비"
+                          ? "사진 묶는 중…"
+                          : `📦 사진·그림 ${imageCount}장 한 번에 저장 (본문 순서대로 번호)`}
+                    </button>
+                  )}
                   {figures.some((f) => f.status === "loading") && (
                     <p className="text-xs text-hb-blue">🎨 그림을 그리는 중입니다 (1장에 30초~1분). 다 그려진 뒤 복사하면 그림도 함께 들어갑니다.</p>
                   )}
                 </div>
+                <details className="mt-3 rounded-lg bg-bg-soft px-3 py-2 text-xs leading-5" open>
+                  <summary className="cursor-pointer font-bold text-hb-navy">✅ 네이버에 올리기 전 체크리스트</summary>
+                  <ol className="mt-1.5 list-decimal space-y-1 pl-5 text-ink">
+                    <li>네이버 글쓰기에서 제목을 붙여넣고, 본문을 클릭한 뒤 붙여넣기(Ctrl+V)</li>
+                    <li>
+                      글이 왼쪽으로 붙었다면: 본문 클릭 → <b>Ctrl+A</b>(전체 선택) → 위쪽 <b>가운데 정렬</b> 버튼
+                    </li>
+                    {(result.photos.length > 0 || figuresOf(body).length > 0) && (
+                      <li>
+                        사진: <b>📦 한 번에 저장</b> → 압축 풀기 → 에디터의 <b>[사진N]</b> 글자 자리에 같은 번호 파일을 끌어다
+                        놓고, [사진N] 글자는 지우기
+                      </li>
+                    )}
+                    <li>
+                      위치: 위쪽 <b>장소</b> 버튼 → &lsquo;스마트해법영어 백운밸리점&rsquo; 검색 → 추가 (원장님 글처럼 맨 아래에)
+                    </li>
+                    <li>
+                      태그: 아래 <b>태그 복사</b> → 글 아래 태그 칸에 붙여넣기
+                    </li>
+                  </ol>
+                  <p className="mt-1.5 text-ink-soft">
+                    정렬·사진이 매번 풀린다면{" "}
+                    <Link href="/studio/paste-test" className="font-bold text-hb-navy underline">
+                      붙여넣기 시험
+                    </Link>
+                    에서 어떤 방식이 되는지 확인해 알려 주세요. 그 방식으로 맞춰 드립니다.
+                  </p>
+                </details>
                 <p className="mt-3 text-xs leading-5 text-ink-soft">
-                  {result.photos.length > 0 && !result.imagesSeen && "이 AI는 사진을 보지 못해 위치만 표시했습니다. "}
-                  사진·그림이 붙여넣기로 안 들어가면 <b>[사진N]</b>·<b>[그림N]</b> 자리에 직접 올려 주세요.
+                  {result.photos.length > 0 && !result.imagesSeen && "이 AI는 사진을 보지 못해 위치만 표시했습니다."}
                   <br />
                   {result.examplesUsed > 1
                     ? "✍️ 원장님 대표 글 + 블로그 최근 글의 문체를 참고했습니다."
