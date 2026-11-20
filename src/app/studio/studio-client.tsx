@@ -7,7 +7,7 @@ import type { Plan, PlanIdea, TypeStat } from "@/studio/planner";
 import type { QuickIdea } from "@/studio/quick-ideas";
 import { fetchStream, partialField } from "@/studio/stream-client";
 import { BLOG_STYLE } from "@/studio/blog-style";
-import { figuresOf, parseBody, toEditorHtml, toPlainText, type Span } from "@/studio/format";
+import { changedLines, figuresOf, parseBody, toEditorHtml, toPlainText, type Span } from "@/studio/format";
 import { DEFAULT_OPENAI_MODEL, MAX_AI_IMAGES, OPENAI_KEY_PATTERN, OPENAI_MODELS } from "@/studio/openai-models";
 
 const noopSubscribe = () => () => {};
@@ -138,7 +138,9 @@ export default function StudioClient({
   // 자연어 수정: 요청 → AI가 해당 부분만 고침. history 로 한 단계씩 되돌리기
   const [revText, setRevText] = useState("");
   const [revising, setRevising] = useState(false);
-  const [revMsg, setRevMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [revMsg, setRevMsg] = useState<{ ok: boolean; text: string; changes?: string[] } | null>(null);
+  /** 마지막 글 고치기에서 바뀐 줄 (미리보기에 노란 표시). 직접 고치거나 새 글을 만들면 지움 */
+  const [changed, setChanged] = useState<Set<number> | null>(null);
   const [history, setHistory] = useState<{ title: string; body: string }[]>([]);
   const [typeId, setTypeId] = useState(postTypes[0].id);
   // null = 아직 고르지 않음 → 글 유형의 기본 키워드 사용
@@ -240,6 +242,7 @@ export default function StudioClient({
     }
     setLoading(true);
     setLive(null);
+    setChanged(null);
     setError(null);
     setResult(null);
     setFigures([]);
@@ -311,7 +314,11 @@ export default function StudioClient({
           }),
         },
         showLive,
-      )) as { success: boolean; error: string; data: { title: string; body: string; notes: string } };
+      )) as {
+        success: boolean;
+        error: string;
+        data: { title: string; body: string; notes: string; changes: string[]; unchanged: boolean };
+      };
       if (!json.success) {
         setRevMsg({ ok: false, text: json.error });
         return;
@@ -321,7 +328,12 @@ export default function StudioClient({
       setResult({ ...result, title: json.data.title });
       setBody(json.data.body);
       setRevText("");
-      setRevMsg({ ok: true, text: json.data.notes || "고쳤습니다." });
+      setChanged(changedLines(body, json.data.body));
+      setRevMsg(
+        json.data.unchanged
+          ? { ok: false, text: "요청이 글에 반영되지 않았어요. 어느 부분을 어떻게 바꿀지 조금 더 구체적으로 적어 다시 요청해 주세요." }
+          : { ok: true, text: json.data.notes, changes: json.data.changes },
+      );
     } catch (err) {
       setRevMsg({ ok: false, text: err instanceof Error ? err.message : "요청 실패" });
     } finally {
@@ -337,6 +349,7 @@ export default function StudioClient({
     setHistory((h) => h.slice(0, -1));
     setResult({ ...result, title: last.title });
     setBody(last.body);
+    setChanged(null);
     setRevMsg({ ok: true, text: "이전 글로 되돌렸습니다." });
   }
 
@@ -754,7 +767,10 @@ export default function StudioClient({
                   <>
                     <textarea
                       value={body}
-                      onChange={(e) => setBody(e.target.value)}
+                      onChange={(e) => {
+                        setBody(e.target.value);
+                        setChanged(null);
+                      }}
                       className="h-[30rem] w-full resize-y rounded-lg border border-line p-3 text-[14px] leading-6"
                     />
                     <p className="mt-1 text-xs text-ink-soft">
@@ -792,7 +808,19 @@ export default function StudioClient({
                       figures={figures}
                       center={center}
                       view={view}
+                      changed={revising ? undefined : (changed ?? undefined)}
                     />
+                    {changed && changed.size > 0 && !revising && (
+                      <p className="mt-1.5 flex items-center justify-between text-xs text-ink-soft">
+                        <span>
+                          <span className="mr-1 inline-block h-3 w-3 rounded-sm bg-[#fff3b0] align-middle ring-1 ring-amber-300" />
+                          방금 고친 줄 {changed.size}곳
+                        </span>
+                        <button type="button" onClick={() => setChanged(null)} className="underline">
+                          표시 지우기
+                        </button>
+                      </p>
+                    )}
                   </>
                 )}
                 <div className="mt-4 space-y-2">
@@ -882,8 +910,22 @@ export default function StudioClient({
                   <p
                     className={`mt-2 rounded-lg p-2.5 text-xs leading-5 ${revMsg.ok ? "bg-amber-50 text-amber-900" : "bg-red-50 text-red-800"}`}
                   >
-                    {revMsg.ok ? "✓ " : ""}
-                    {revMsg.text}
+                    {revMsg.ok && revMsg.changes?.length ? (
+                      <>
+                        <b>✓ 이렇게 고쳤어요</b>
+                        {revMsg.changes.map((c) => (
+                          <span key={c} className="block">
+                            · {c}
+                          </span>
+                        ))}
+                        {revMsg.text && <span className="mt-1 block">확인해 주세요: {revMsg.text}</span>}
+                      </>
+                    ) : (
+                      <>
+                        {revMsg.ok ? "✓ " : ""}
+                        {revMsg.text || (revMsg.ok ? "고쳤습니다." : "")}
+                      </>
+                    )}
                   </p>
                 )}
                 <p className="mt-2 text-xs text-ink-soft">
@@ -1324,6 +1366,7 @@ function Preview({
   figures,
   center,
   view,
+  changed,
 }: {
   title: string;
   body: string;
@@ -1331,6 +1374,8 @@ function Preview({
   figures: FigureState[];
   center: boolean;
   view: "mobile" | "pc";
+  /** 방금 고친 줄 번호 (노란 배경) */
+  changed?: Set<number>;
 }) {
   const S = BLOG_STYLE;
   return (
@@ -1355,61 +1400,72 @@ function Preview({
           style={{ fontSize: S.fontSize, lineHeight: S.lineHeight, color: S.bodyColor, textAlign: center ? "center" : "left" }}
         >
           {parseBody(body).map((b, i) => {
-            switch (b.kind) {
-              case "blank":
-                return <div key={i} style={{ height: `${S.lineHeight}em` }} />;
-              case "heading":
-                return (
-                  <p key={i}>
-                    <b style={{ color: S.headingColor }}>{b.text}</b>
-                  </p>
-                );
-              case "quote":
-                return (
-                  <p key={i}>
-                    <Spans spans={b.spans} strong={S.strongColor} />
-                  </p>
-                );
-              case "photo": {
-                const src = photos[b.n - 1];
-                return src ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img key={i} src={src} alt={`사진${b.n}`} className="my-3 inline-block w-full" />
-                ) : (
-                  <p key={i} className="my-2 rounded bg-bg-soft py-6 text-center text-xs font-bold text-ink-soft">
-                    [사진{b.n}] 자리
-                  </p>
-                );
-              }
-              case "figure": {
-                const f = figureFor(figures, b.desc);
-                return f?.status === "done" ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img key={i} src={f.src} alt={b.desc} className="my-3 inline-block w-full" />
-                ) : (
-                  <p key={i} className="my-2 rounded border border-dashed border-hb-blue py-4 text-center text-xs text-hb-blue">
-                    🎨 그림{b.n} {f?.status === "loading" ? "그리는 중…" : ""} — {b.desc}
-                  </p>
-                );
-              }
-              default:
-                if (b.role === "greeting-name") {
-                  return (
-                    <p key={i}>
-                      <b style={{ color: S.nameColor }}>스마트해법영어 백운밸리점</b>
-                      {b.text.replace(/^스마트해법영어 백운밸리점/, "")}
-                    </p>
-                  );
-                }
-                return (
-                  <p key={i}>
-                    <Spans spans={b.spans} strong={b.role ? S.strongColor : undefined} />
-                  </p>
-                );
-            }
+            const el = renderBlock(b, i);
+            return changed?.has(i) ? (
+              <div key={i} className="rounded-sm bg-[#fff3b0]">
+                {el}
+              </div>
+            ) : (
+              el
+            );
           })}
         </div>
       </article>
     </div>
   );
+
+  function renderBlock(b: ReturnType<typeof parseBody>[number], i: number) {
+    switch (b.kind) {
+      case "blank":
+        return <div key={i} style={{ height: `${S.lineHeight}em` }} />;
+      case "heading":
+        return (
+          <p key={i}>
+            <b style={{ color: S.headingColor }}>{b.text}</b>
+          </p>
+        );
+      case "quote":
+        return (
+          <p key={i}>
+            <Spans spans={b.spans} strong={S.strongColor} />
+          </p>
+        );
+      case "photo": {
+        const src = photos[b.n - 1];
+        return src ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img key={i} src={src} alt={`사진${b.n}`} className="my-3 inline-block w-full" />
+        ) : (
+          <p key={i} className="my-2 rounded bg-bg-soft py-6 text-center text-xs font-bold text-ink-soft">
+            [사진{b.n}] 자리
+          </p>
+        );
+      }
+      case "figure": {
+        const f = figureFor(figures, b.desc);
+        return f?.status === "done" ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img key={i} src={f.src} alt={b.desc} className="my-3 inline-block w-full" />
+        ) : (
+          <p key={i} className="my-2 rounded border border-dashed border-hb-blue py-4 text-center text-xs text-hb-blue">
+            🎨 그림{b.n} {f?.status === "loading" ? "그리는 중…" : ""} — {b.desc}
+          </p>
+        );
+      }
+      default:
+        if (b.role === "greeting-name") {
+          return (
+            <p key={i}>
+              <b style={{ color: S.nameColor }}>스마트해법영어 백운밸리점</b>
+              {b.text.replace(/^스마트해법영어 백운밸리점/, "")}
+            </p>
+          );
+        }
+        return (
+          <p key={i}>
+            <Spans spans={b.spans} strong={b.role ? S.strongColor : undefined} />
+          </p>
+        );
+    }
+  }
 }

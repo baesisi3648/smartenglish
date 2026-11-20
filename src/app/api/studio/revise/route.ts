@@ -52,7 +52,14 @@ export async function POST(req: NextRequest) {
       }
       return NextResponse.json({
         success: true,
-        data: { title: withKeyword(draft.title || title, keyword), body: wrapBody(draft.body), notes: draft.notes },
+        data: {
+          title: withKeyword(draft.title || title, keyword),
+          body: wrapBody(draft.body),
+          notes: draft.notes,
+          changes: draft.changes ?? [],
+          // 본문·제목이 그대로면 화면에서 "반영되지 않았어요"로 알린다
+          unchanged: draft.body.trim() === body.trim() && (draft.title || title).trim() === title.trim(),
+        },
       });
     } catch (e) {
       return errorResponse(e);

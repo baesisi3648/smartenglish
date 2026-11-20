@@ -164,3 +164,32 @@ export function toEditorHtml(
     .join("");
   return `<div style="font-size:${S.fontSize}px;line-height:${S.lineHeight};color:${S.bodyColor};">${html}</div>`;
 }
+
+/**
+ * 글 고치기 전후 비교: 새 본문에서 바뀌었거나 새로 생긴 줄 번호 (줄 단위 LCS).
+ * 빈 줄은 표시하지 않는다. 본문이 수백 줄을 넘지 않아 O(n·m)으로 충분하다.
+ */
+export function changedLines(before: string, after: string): Set<number> {
+  const a = before.split("\n").map((l) => l.trim());
+  const b = after.split("\n").map((l) => l.trim());
+  const dp = Array.from({ length: a.length + 1 }, () => new Array<number>(b.length + 1).fill(0));
+  for (let i = a.length - 1; i >= 0; i--) {
+    for (let j = b.length - 1; j >= 0; j--) {
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const same = new Set<number>();
+  for (let i = 0, j = 0; i < a.length && j < b.length; ) {
+    if (a[i] === b[j]) {
+      same.add(j);
+      i++;
+      j++;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) i++;
+    else j++;
+  }
+  const out = new Set<number>();
+  b.forEach((l, j) => {
+    if (l && !same.has(j)) out.add(j);
+  });
+  return out;
+}
