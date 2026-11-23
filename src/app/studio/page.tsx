@@ -8,7 +8,7 @@ import { passwordConfigured, verifySessionToken, SESSION_COOKIE } from "@/studio
 import { POST_TYPES, KEYWORD_GROUPS } from "@/studio/post-types";
 import { getLatestPosts } from "@/lib/blog";
 import { todayKst } from "@/studio/planner";
-import { quickIdeas } from "@/studio/quick-ideas";
+import { autoPicks, quickIdeas } from "@/studio/quick-ideas";
 import StudioClient from "./studio-client";
 import LoginForm from "./login-form";
 import { logout } from "./actions";
@@ -82,11 +82,14 @@ async function Gate() {
   }
 
   // 추천 주제: 학사 시기 + 블로그 최근 글(RSS, 1시간 캐시)로 즉시 계산 (AI 호출 없음)
-  const ideas = quickIdeas(todayKst(), await getLatestPosts(30));
+  const posts = await getLatestPosts(30);
+  const ideas = quickIdeas(todayKst(), posts);
+  const picks = autoPicks(todayKst(), posts);
 
   return (
     <StudioClient
       ideas={ideas}
+      picks={picks}
       agents={agents.map(({ id, label, plan, loginHelp }) => ({ id, label, plan, loginHelp }))}
       postTypes={POST_TYPES}
       keywordGroups={KEYWORD_GROUPS}

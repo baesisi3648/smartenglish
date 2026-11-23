@@ -144,6 +144,15 @@ const SEASON_SEEDS: Record<string, Seed[]> = {
       keywords: ["기말고사", "중등 내신", "백운중"],
       dup: /2학기.*기말|기말고사.*(대비|점검)/,
     },
+    {
+      id: "final2-writing",
+      type: "column",
+      title: "기말고사 영어 서술형, 집에서 점검하는 법",
+      outline: ["서술형에서 자주 깎이는 부분", "교과서 본문 문장으로 연습하기", "시험 직전 오답 다시 보기"],
+      needs: [],
+      keywords: ["기말고사", "중등 내신", "중등 영어"],
+      dup: /서술형/,
+    },
   ],
   "겨울방학 특강 모집·크리스마스": [
     {
@@ -163,6 +172,24 @@ const SEASON_SEEDS: Record<string, Seed[]> = {
       needs: ["행사 날짜", "실제로 한 활동"],
       keywords: ["백운호수초", "초등 영어"],
       dup: /크리스마스/,
+    },
+    {
+      id: "winter-check",
+      type: "column",
+      title: "겨울방학 전, 꼭 점검할 영어 기초",
+      outline: ["한 학기 동안 생긴 빈틈 찾기", "방학에 다시 다질 소리·어휘·문법", "아이별 진단으로 방학 계획 세우기"],
+      needs: [],
+      keywords: ["방학 특강", "초등 중등 영어", "의왕 영어학원"],
+      dup: /겨울방학.*(점검|준비|기초)/,
+    },
+    {
+      id: "pre-middle",
+      type: "column",
+      title: "예비 중1, 겨울방학에 준비할 영어",
+      outline: ["초등과 중등 영어가 달라지는 점", "중학교 내신 영어의 모습", "방학 동안 다져 둘 문법·독해 기초"],
+      needs: [],
+      keywords: ["중등 영어", "초등 중등 영어", "의왕 영어학원"],
+      dup: /예비 ?중/,
     },
   ],
 };
@@ -263,6 +290,30 @@ const EVERGREEN: Record<string, Seed[]> = {
 
 const DAY_LABEL = (d: number | null) => (d === null ? "아직 쓴 적이 없어요" : `${d}일째 안 썼어요`);
 const MAX_IDEAS = 5;
+
+/**
+ * "오늘의 맞춤 추천" 후보: 원장님 정보 없이 바로 쓸 수 있는(needs 없음) 주제 전체.
+ * 지금 시기 주제 → 다가오는 시기 → 상시 칼럼 순으로 모은 뒤, 날짜마다 시작점을 돌려 매일 다른 주제가 먼저 오게 한다.
+ * 최근 글과 겹치는 주제는 뺀다. 화면의 "다른 주제" 버튼으로 다음 후보를 볼 수 있다.
+ */
+export function autoPicks(today: Date, posts: BlogPost[]): QuickIdea[] {
+  const recent = posts.slice(0, 15).map((p) => p.title);
+  const fresh = (s: Seed) => !recent.some((t) => s.dup.test(t));
+  const out: QuickIdea[] = [];
+  const add = (s: Seed, reason: string, source: QuickIdea["source"]) => {
+    if (s.needs.length || !fresh(s) || out.some((o) => o.id === s.id)) return;
+    const { dup, ...idea } = s;
+    void dup;
+    out.push({ ...idea, reason, source });
+  };
+  const seasons = upcomingSeasons(today).sort((a, b) => Number(b.ongoing) - Number(a.ongoing));
+  for (const s of seasons) for (const seed of SEASON_SEEDS[s.label] ?? []) add(seed, `📅 ${s.label} 시기 (${s.ongoing ? "지금" : "곧"})`, "season");
+  for (const seed of EVERGREEN.column) add(seed, "💡 언제 올려도 좋은 교육 칼럼", "gap");
+  if (out.length < 2) return out;
+  const day = Math.floor(today.getTime() / 86_400_000);
+  const k = day % out.length;
+  return [...out.slice(k), ...out.slice(0, k)];
+}
 
 export function quickIdeas(today: Date, posts: BlogPost[]): QuickIdea[] {
   const recent = posts.slice(0, 12).map((p) => p.title);

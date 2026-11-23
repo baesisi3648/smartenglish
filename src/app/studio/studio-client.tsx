@@ -99,6 +99,7 @@ const AGENT_KEY = "hb-studio-agent";
 
 export default function StudioClient({
   ideas,
+  picks,
   agents,
   postTypes,
   keywordGroups,
@@ -106,6 +107,8 @@ export default function StudioClient({
 }: {
   /** 추천 주제 (학사 시기·최근 글 공백으로 즉시 계산) */
   ideas: QuickIdea[];
+  /** 오늘의 맞춤 추천 후보 (날짜마다 순서가 돌아감, "다른 주제"로 넘김) */
+  picks: QuickIdea[];
   agents: AgentInfo[];
   postTypes: PostType[];
   keywordGroups: { label: string; items: string[] }[];
@@ -163,7 +166,8 @@ export default function StudioClient({
   /** 고른 추천 칩: 주제 칸에 그 제목이 남아 있을 때만 선택된 것으로 본다 (직접 바꾸면 해제) */
   const pickedIdea = ideas.find((i) => i.id === ideaPicked && topic.split("\n")[0].trim() === i.title);
   /** 주제 없이 바로 쓸 맞춤 추천: 원장님께 받을 사실이 없는 첫 추천 */
-  const todayPick = ideas.find((i) => i.needs.length === 0);
+  const [pickIdx, setPickIdx] = useState(0);
+  const todayPick = picks.length ? picks[pickIdx % picks.length] : ideas.find((i) => i.needs.length === 0);
   const [files, setFiles] = useState<File[]>([]);
   const [consent, setConsent] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -694,7 +698,19 @@ export default function StudioClient({
               )}
               {todayPick && (
                 <div className="mt-3 rounded-xl bg-white/10 p-3">
-                  <p className="text-[11px] font-bold text-hb-yellow">오늘의 맞춤 추천</p>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-[11px] font-bold text-hb-yellow">오늘의 맞춤 추천</p>
+                    {picks.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => setPickIdx((i) => i + 1)}
+                        disabled={busy}
+                        className="rounded-full bg-white/15 px-2.5 py-0.5 text-[11px] font-bold text-white hover:bg-white/25"
+                      >
+                        🔄 다른 주제 ({(pickIdx % picks.length) + 1}/{picks.length})
+                      </button>
+                    )}
+                  </div>
                   <p className="mt-0.5 font-extrabold">{todayPick.title}</p>
                   <p className="mt-0.5 text-[11px] leading-4 text-white/70">{todayPick.reason}</p>
                   <button
