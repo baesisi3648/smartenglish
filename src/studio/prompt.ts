@@ -128,6 +128,8 @@ export function buildPrompt(opts: {
   aiImages?: number;
   /** 자동 글: 원장님 입력 없이 확인된 정보 + 일반 교육 이야기로 바로 올릴 글 (topic 은 주제 힌트, 비면 AI가 정함) */
   auto?: AutoContext;
+  /** 에이전트가 정한 제목·구성 아이디어. 원장 입력과 분리해 "사실 아님"으로 전달 */
+  planHint?: string;
 }) {
   const aiImages = opts.aiImages ?? 0;
   const facts = opts.type.fields
@@ -166,7 +168,14 @@ ${styleExamples(opts.examples)}
 ${formatGuide(aiImages)}
 
 ${opts.auto ? autoSection(opts.auto, opts.topic) : manualSection()}
-[사진] ${imageNote}
+${
+  opts.planHint?.trim()
+    ? `[글 구성 참고 — 기획 단계 아이디어일 뿐 사실이 아닙니다]
+${esc(opts.planHint.trim())}
+→ 제목·순서·다룰 내용의 참고로만 쓰세요. 여기 나온 행사·성적·인원·결과는 원장 입력이나 확인된 정보에 없으면 쓰지 마세요.
+`
+    : ""
+}[사진] ${imageNote}
 [검색 키워드]
 - 대표 키워드(제목 뒤 괄호에 시스템이 붙임): ${opts.keywords[0]}
 ${

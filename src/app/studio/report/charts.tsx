@@ -115,15 +115,15 @@ export function MonthlyBars({ data }: { data: MonthPoint[] }) {
             onFocus={() => setHover(i)}
             onBlur={() => setHover(null)}
             className="group relative flex h-full min-w-0 flex-1 flex-col justify-end"
-            aria-label={`${d.label} 조회수 ${d.views}회${d.visitors !== undefined ? `, 순방문자 ${d.visitors}명` : ""}${d.partial ? " (22일까지)" : ""}`}
+            aria-label={`${d.label} 조회수 ${d.views}회${d.visitors !== undefined ? `, 순방문자 ${d.visitors}명` : ""}${d.untilDay ? ` (${d.untilDay}일까지)` : ""}`}
           >
             <span className="mb-0.5 text-center text-[10px] font-bold tabular-nums text-ink sm:text-[11px]">{d.views}</span>
             <span
               className="block w-full rounded-t-[4px] transition-opacity group-hover:opacity-80"
               style={{
                 height: `${(d.views / max) * 100}%`,
-                background: d.partial ? "#fff" : BLUE,
-                border: d.partial ? `2px solid ${BLUE}` : undefined,
+                background: d.untilDay ? "#fff" : BLUE,
+                border: d.untilDay ? `2px solid ${BLUE}` : undefined,
                 borderBottom: "none",
               }}
             />
@@ -139,8 +139,8 @@ export function MonthlyBars({ data }: { data: MonthPoint[] }) {
       </div>
       <p className="mt-2 min-h-5 text-xs text-ink-soft">
         {h
-          ? `${h.label} · 조회 ${h.views}회${h.visitors !== undefined ? ` · 순방문자 ${h.visitors}명${h.visitorsApprox ? "(대략)" : ""}` : ""}${h.partial ? " (11월 22일까지)" : ""}`
-          : "막대에 마우스를 올리면 순방문자수도 보여요 · 테두리 막대 = 11월(22일까지)"}
+          ? `${h.label} · 조회 ${h.views}회${h.visitors !== undefined ? ` · 순방문자 ${h.visitors}명${h.visitorsApprox ? "(대략)" : ""}` : ""}${h.untilDay ? ` (${h.untilDay}일까지)` : ""}`
+          : "막대에 마우스를 올리면 순방문자수도 보여요 · 테두리 막대 = 아직 진행 중인 달"}
       </p>
     </div>
   );

@@ -10,6 +10,8 @@ import {
   ARRIVED_KEYWORDS,
   KEYWORD_VOLUMES,
   MONTHLY,
+  monthName,
+  weekRange,
   NEIGHBOR_VIEWS_90D,
   PEAK_TIME,
   BLOCKED_KEYWORDS,
@@ -57,33 +59,37 @@ async function Report() {
   const nov = MONTHLY[MONTHLY.length - 1].views;
   const oct = MONTHLY[MONTHLY.length - 2].views;
   const searchShare = SOURCE_PERIODS.map((_, i) =>
-    Math.round(SOURCES.filter((s) => s.label.includes("검색")).reduce((a, s) => a + s.values[i], 0)),
+    Math.round(SOURCES.filter((s) => s.search).reduce((a, s) => a + s.values[i], 0)),
   );
   const top = [...daily].sort((a, b) => b.views - a.views).slice(0, 4);
-  const novPosts = POSTS_IN_RANGE.filter((p) => p.date.startsWith("2026-11")).length;
-  const octPosts = POSTS_IN_RANGE.filter((p) => p.date.startsWith("2026-10")).length;
   const kv = (kw: string) => KEYWORD_VOLUMES.find((k) => k.kw === kw)!;
   const vol = (k: { pc: number | null; mobile: number | null }) => (k.pc ?? 0) + (k.mobile ?? 0);
   const academy = kv("의왕영어학원");
   const school = kv("덕장중");
   const brand = kv("스마트해법영어");
+  const curM = MONTHLY[MONTHLY.length - 1];
   const octM = MONTHLY[MONTHLY.length - 2];
+  const curName = monthName(curM.label);
+  const prevName = monthName(octM.label);
+  const ym = (label: string) => `20${label.replace(".", "-")}`;
+  const novPosts = POSTS_IN_RANGE.filter((p) => p.date.startsWith(ym(curM.label))).length;
+  const octPosts = POSTS_IN_RANGE.filter((p) => p.date.startsWith(ym(octM.label))).length;
 
   const tiles = [
     {
-      label: "11월 조회수 (22일까지)",
+      label: `${curName} 조회수${curM.untilDay ? ` (${curM.untilDay}일까지)` : ""}`,
       value: `${fmt(nov)}회`,
-      note: <span className="font-bold text-emerald-700">10월 전체 {oct}회의 {(nov / oct).toFixed(1)}배</span>,
+      note: <span className="font-bold text-emerald-700">{prevName} 전체 {oct}회의 {(nov / oct).toFixed(1)}배</span>,
     },
     {
       label: "최근 1주 조회수",
       value: `${fmt(lastWeek)}회`,
-      note: <span>11.16 ~ 11.22 · 그 전 주 {prevWeek}회</span>,
+      note: <span>{weekRange(0)} · 그 전 주 {prevWeek}회</span>,
     },
     {
       label: "검색으로 들어온 비율",
       value: `${searchShare[2]}%`,
-      note: <span>최근 1주 · 10월은 {searchShare[0]}%</span>,
+      note: <span>{SOURCE_PERIODS[2]} · {SOURCE_PERIODS[0]} {searchShare[0]}%</span>,
     },
     {
       label: "이웃이 본 조회",
@@ -92,12 +98,12 @@ async function Report() {
     },
   ];
 
-  const novTop = top.filter((d) => d.date >= "2026-11-01");
+  const novTop = top.filter((d) => d.date.startsWith(ym(curM.label)));
   const insights: { icon: string; head: string; body: string }[] = [
     {
       icon: "📈",
-      head: `11월 조회수, 10월의 ${(nov / oct).toFixed(1)}배`,
-      body: `22일까지 ${nov}회 (10월 ${oct}회 · 순방문자 ${octM.visitors}명). 글 수는 ${octPosts}편 → ${novPosts}편으로 같고, 11월 글엔 학교 이름이 들어갔어요.`,
+      head: `${curName} 조회수, ${prevName}의 ${(nov / oct).toFixed(1)}배`,
+      body: `${curM.untilDay ? `${curM.untilDay}일까지 ` : ""}${nov}회 (${prevName} ${oct}회 · 순방문자 ${octM.visitors}명). 글 수는 ${octPosts}편 → ${novPosts}편으로 같고, 11월 글엔 학교 이름이 들어갔어요.`,
     },
     {
       icon: "📝",

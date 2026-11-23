@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { runBlogAgent, type AgentStep } from "@/studio/blog-agent";
 import { redactSecrets } from "@/studio/errors";
-import { takeApiQuota } from "@/studio/guard";
+import { takeApiQuota, takeTrialQuota } from "@/studio/guard";
 import { checkQuota, checkStudioRequest, errorResponse, fail, redactDeep, resolveAgent } from "@/studio/request";
 
 export const maxDuration = 300;
@@ -28,10 +28,15 @@ export async function POST(req: NextRequest) {
 
   const overQuota = checkQuota(req, agent);
   if (overQuota) return overQuota;
-  // 서버 키 AI는 무거운 호출(쓰기·고치기)마다 사용량을 한 번 더 센다 — 첫 쓰기는 위에서 센 것으로
+  // 서버 키 AI(Gemini·DeepSeek·GPT 체험)는 AI 호출마다 사용량을 센다 — 첫 호출은 위 checkQuota 로 이미 셈.
+  // GPT 체험은 호출마다 하루 횟수도 차감 (실패한 호출은 runModel 이 그 1회만 돌려줌)
   const client = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || req.headers.get("x-real-ip") || "local";
-  let heavy = 0;
-  const allowHeavy = () => agent.def.kind !== "api" || heavy++ === 0 || takeApiQuota(client);
+  let calls = 0;
+  const allowCall = () => {
+    if (agent.def.kind !== "api" || calls++ === 0) return true;
+    if (!takeApiQuota(client)) return false;
+    return agent.def.id !== "gpt" || takeTrialQuota() >= 0;
+  };
 
   const enc = new TextEncoder();
   const abort = new AbortController();
@@ -48,10 +53,10 @@ export async function POST(req: NextRequest) {
       };
       // 화면에 보내는 모든 글은 비밀값 가림을 거친다
       const emit = (step: AgentStep) => write({ t: "step", step: redactDeep(step) });
-      runBlogAgent({ instruction, agent, signal: AbortSignal.any([req.signal, abort.signal]), emit, allowHeavy })
+      runBlogAgent({ instruction, agent, signal: AbortSignal.any([req.signal, abort.signal]), emit, allowCall })
         .then((r) => {
           if (!r.draft) return NextResponse.json({ success: false, code: "NO_DRAFT", error: redactSecrets(r.summary) }, { status: 422 });
-          return NextResponse.json({ success: true, data: redactDeep({ ...r.draft, summary: r.summary, checks: r.checks, agent: agent.def.id }) });
+          return NextResponse.json({ success: true, data: redactDeep({ ...r.draft, summary: r.summary, checks: r.checks, needsReview: r.needsReview, agent: agent.def.id }) });
         })
         .catch((e) => errorResponse(e))
         .then(async (res) => write({ t: "end", status: res.status, body: await res.json() }))

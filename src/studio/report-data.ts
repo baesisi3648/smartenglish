@@ -8,7 +8,7 @@ import "server-only";
 
 export type DailyPoint = { date: string; label: string; views: number; post?: string };
 export type Share = { label: string; value: number };
-export type MonthPoint = { label: string; views: number; visitors?: number; visitorsApprox?: boolean; partial?: boolean };
+export type MonthPoint = { label: string; views: number; visitors?: number; visitorsApprox?: boolean; /** 진행 중인 달: 이 날짜까지 합계 */ untilDay?: number };
 
 export const UPDATED = "2026.11.23";
 
@@ -22,6 +22,20 @@ const DAILY_VIEWS = [
   10, 5, 5, 1, 2, 3, 1,
 ];
 export const NEIGHBOR_VIEWS_90D = 1;
+
+/** 일별 자료의 마지막 날 (월별 진행 중 합계·화면 기간 표시를 모두 여기서 계산) */
+const LAST = new Date(DAILY_FROM + (DAILY_VIEWS.length - 1) * 86_400_000);
+const pad2 = (n: number) => String(n).padStart(2, "0");
+
+/** "26.11" → "11월" */
+export const monthName = (label: string) => `${Number(label.slice(3))}월`;
+/** 일별 자료 끝에서 weeksAgo 주 전의 7일 범위 → "11.16 ~ 11.22" */
+export function weekRange(weeksAgo = 0) {
+  const end = new Date(LAST.getTime() - weeksAgo * 7 * 86_400_000);
+  const start = new Date(end.getTime() - 6 * 86_400_000);
+  const f = (d: Date) => `${pad2(d.getUTCMonth() + 1)}.${pad2(d.getUTCDate())}`;
+  return `${f(start)} ~ ${f(end)}`;
+}
 
 /** 이 기간에 올린 글 (RSS 기준) */
 export const POSTS_IN_RANGE: { date: string; title: string; link: string }[] = [
@@ -64,7 +78,11 @@ export const MONTHLY: MonthPoint[] = [
   { label: "26.08", views: 79, visitors: 58 },
   { label: "26.09", views: 51, visitors: 11 },
   { label: "26.10", views: 36, visitors: 21 },
-  { label: "26.11", views: DAILY_VIEWS.slice(-22).reduce((s, v) => s + v, 0), partial: true },
+  {
+    label: `${String(LAST.getUTCFullYear()).slice(2)}.${pad2(LAST.getUTCMonth() + 1)}`,
+    views: DAILY_VIEWS.slice(-LAST.getUTCDate()).reduce((s, v) => s + v, 0),
+    untilDay: LAST.getUTCDate(),
+  },
 ];
 
 /** 시간대 분석: 일간 화면만 있어 원장님이 본 경향을 글로 기록 */
@@ -72,13 +90,14 @@ export const PEAK_TIME = "오후 2시 ~ 5시";
 
 /** 유입 경로 비율(%) — 네이버 분류를 원장님이 보기 쉬운 묶음으로 합친 값 */
 export const SOURCE_PERIODS = ["10월 전체", "11.09 ~ 11.15", "11.16 ~ 11.22"] as const;
-export const SOURCES: { label: string; hint: string; values: [number, number, number] }[] = [
-  { label: "블로그 안에서 이동", hint: "글 목록·다른 글·블로그 홈에서 넘어온 방문 (처음 시작은 검색·지도인 경우가 많음)", values: [41.4, 65.4, 75] },
-  { label: "네이버 지도·플레이스", hint: "학원 플레이스의 블로그 탭·홈에서 넘어온 방문", values: [13.8, 19.2, 12.5] },
-  { label: "네이버 검색", hint: "통합검색·이미지검색", values: [17.2, 11.5, 12.5] },
-  { label: "구글", hint: "", values: [13.8, 3.8, 0] },
-  { label: "다음 검색", hint: "", values: [10.3, 0, 0] },
-  { label: "인스타그램 등", hint: "", values: [3.4, 0, 0] },
+/** search = 검색엔진에서 온 방문 (검색 비율 계산에 씀) */
+export const SOURCES: { label: string; hint: string; search: boolean; values: [number, number, number] }[] = [
+  { label: "블로그 안에서 이동", search: false, hint: "글 목록·다른 글·블로그 홈에서 넘어온 방문 (처음 시작은 검색·지도인 경우가 많음)", values: [41.4, 65.4, 75] },
+  { label: "네이버 지도·플레이스", search: false, hint: "학원 플레이스의 블로그 탭·홈에서 넘어온 방문", values: [13.8, 19.2, 12.5] },
+  { label: "네이버 검색", search: true, hint: "통합검색·이미지검색", values: [17.2, 11.5, 12.5] },
+  { label: "구글", search: true, hint: "", values: [13.8, 3.8, 0] },
+  { label: "다음 검색", search: true, hint: "", values: [10.3, 0, 0] },
+  { label: "인스타그램 등", search: false, hint: "", values: [3.4, 0, 0] },
 ];
 
 /** 실제로 블로그에 들어온 검색어 (유입분석 상세 + 플레이스·블로그 주소에 남은 검색어) */
