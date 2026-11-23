@@ -7,6 +7,7 @@ import {
   bulkAdd,
   cleanName,
   cleanNote,
+  fixWeek,
   getWeek,
   isTime,
   isWeekday,
@@ -28,14 +29,16 @@ const MAX_BODY_BYTES = 32 * 1024;
 /** 아이들 이름이 오가므로 캐시 금지 */
 const ok = (data: unknown) => NextResponse.json({ success: true, data }, { headers: { "Cache-Control": "no-store" } });
 
-type Slots = { weekday: Weekday; time: string }[];
+type Slots = { weekday: Weekday; time: string; arrive: string | null }[];
 /** 요일·시각 목록 검사 (요일 중복은 첫 번째만). 형식이 틀리면 null */
 function slotsOf(v: unknown): Slots | null {
   const raw = Array.isArray(v) ? v.slice(0, 5) : [];
   const out: Slots = [];
   for (const s of raw as Record<string, unknown>[]) {
     if (!isWeekday(s?.weekday) || !isTime(s?.time)) return null;
-    if (!out.some((x) => x.weekday === s.weekday)) out.push({ weekday: s.weekday, time: s.time });
+    const arrive = s.arrive == null || s.arrive === "" ? null : isTime(s.arrive) ? s.arrive : undefined;
+    if (arrive === undefined) return null;
+    if (!out.some((x) => x.weekday === s.weekday)) out.push({ weekday: s.weekday, time: s.time, arrive });
   }
   return out;
 }
@@ -48,7 +51,8 @@ function slotsOf(v: unknown): Slots | null {
  *   moveOnce / moveWeekly { studentId, week, from, to, time }      이번 주만 / 매주 옮기기·시간 바꾸기
  *   addVisit { studentId, week, weekday, time, weekly }             빈 요일에 넣기
  *   skipOnce / restore / removeRegularDay { studentId, week, weekday }
- *   saveRows { rows }
+ *   saveRows { rows } · fixWeek { week }   (이번 주 시간표를 앞으로 계속 쓰기)
+ *   arrive(선택): 수업 시각과 다른 실제 도착 시각
  */
 export async function POST(req: NextRequest) {
   const denied = checkStudioRequest(req);
@@ -62,6 +66,8 @@ export async function POST(req: NextRequest) {
   const sid = Number(b.studentId ?? b.id);
   const validId = Number.isInteger(sid) && sid > 0;
   const needStudent = () => (validId ? null : fail(400, "INVALID_ID", "학생을 찾을 수 없습니다."));
+  const arrive = b.arrive == null || b.arrive === "" ? null : isTime(b.arrive) ? b.arrive : undefined;
+  if (arrive === undefined) return fail(400, "INVALID_TIME", "도착 시간 형식이 올바르지 않습니다.");
 
   try {
     switch (b.action) {
@@ -100,14 +106,14 @@ export async function POST(req: NextRequest) {
         const bad = needStudent();
         if (bad) return bad;
         if (!isWeekday(b.from) || !isWeekday(b.to) || !isTime(b.time)) return fail(400, "INVALID_SLOT", "요일·시간이 올바르지 않습니다.");
-        await (b.action === "moveOnce" ? moveOnce : moveWeekly)(sid, week, b.from, b.to, b.time);
+        await (b.action === "moveOnce" ? moveOnce : moveWeekly)(sid, week, b.from, b.to, b.time, arrive);
         break;
       }
       case "addVisit": {
         const bad = needStudent();
         if (bad) return bad;
         if (!isWeekday(b.weekday) || !isTime(b.time)) return fail(400, "INVALID_SLOT", "요일·시간이 올바르지 않습니다.");
-        await addVisit(sid, week, b.weekday, b.time, b.weekly === true);
+        await addVisit(sid, week, b.weekday, b.time, b.weekly === true, arrive);
         break;
       }
       case "skipOnce":
@@ -119,6 +125,9 @@ export async function POST(req: NextRequest) {
         await { skipOnce, restore, removeRegularDay }[b.action](sid, week, b.weekday);
         break;
       }
+      case "fixWeek":
+        await fixWeek(week);
+        break;
       case "saveRows": {
         const rows = Array.isArray(b.rows) ? b.rows.filter(isTime) : [];
         await saveRows(rows);

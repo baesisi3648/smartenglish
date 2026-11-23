@@ -17,7 +17,7 @@ const DAYS: Weekday[] = [1, 2, 3, 4, 5];
 const DAY_LABEL = ["", "월", "화", "수", "목", "금"];
 
 type Status = "regular" | "moved" | "extra" | "off";
-type Entry = { student: Student; weekday: Weekday; time: string; status: Status; regularTime?: string; fromWeekday?: Weekday | null };
+type Entry = { student: Student; weekday: Weekday; time: string; arrive: string | null; status: Status; regularTime?: string; fromWeekday?: Weekday | null };
 type Body = Record<string, unknown>;
 
 const hourOf = (t: string) => Number(t.slice(0, 2));
@@ -27,6 +27,10 @@ const short = (t: string) => `${h12(hourOf(t))}:${t.slice(3)}`;
 const rowLabel = (t: string) => (t.endsWith(":00") ? `${h12(hourOf(t))}시` : short(t));
 const addDays = (iso: string, n: number) => new Date(new Date(`${iso}T00:00:00Z`).getTime() + n * 86_400_000).toISOString().slice(0, 10);
 const md = (iso: string) => `${Number(iso.slice(5, 7))}.${Number(iso.slice(8, 10))}`;
+/** 그 주 월요일 기준 "26년 11월 4주차" */
+const weekLabel = (mon: string) => `${mon.slice(2, 4)}년 ${Number(mon.slice(5, 7))}월 ${Math.floor((Number(mon.slice(8, 10)) - 1) / 7) + 1}주차`;
+/** 칸 안 이름 옆 괄호: 언제나 오는 시각 — 실제 도착 시각이 있으면 그것, 없으면 수업 시각 (10분 단위로 다르니 정각도 표시) */
+const badge = (e: { time: string; arrive: string | null }) => short(e.arrive ?? e.time);
 const plusHour = (t: string) => `${String(Math.min(23, hourOf(t) + 1)).padStart(2, "0")}:${t.slice(3)}`;
 /** 학생 시각이 들어갈 칸: 시각보다 같거나 이른 칸 중 마지막 (첫 칸보다 이르면 첫 칸) */
 const rowIndex = (time: string, rows: string[]) => {
@@ -43,9 +47,9 @@ function buildEntries(d: WeekData): Entry[] {
       const ov = d.overrides.find((o) => o.studentId === s.id && o.weekday === day);
       if (ov) {
         if (ov.time === null) {
-          if (reg) out.push({ student: s, weekday: day, time: reg.time, status: "off", regularTime: reg.time });
-        } else out.push({ student: s, weekday: day, time: ov.time, status: reg ? "moved" : "extra", regularTime: reg?.time, fromWeekday: ov.fromWeekday });
-      } else if (reg) out.push({ student: s, weekday: day, time: reg.time, status: "regular", regularTime: reg.time });
+          if (reg) out.push({ student: s, weekday: day, time: reg.time, arrive: reg.arrive, status: "off", regularTime: reg.time });
+        } else out.push({ student: s, weekday: day, time: ov.time, arrive: ov.arrive, status: reg ? "moved" : "extra", regularTime: reg?.time, fromWeekday: ov.fromWeekday });
+      } else if (reg) out.push({ student: s, weekday: day, time: reg.time, arrive: reg.arrive, status: "regular", regularTime: reg.time });
     }
   }
   return out.sort((a, b) => a.time.localeCompare(b.time) || a.student.name.localeCompare(b.student.name, "ko"));
@@ -105,6 +109,13 @@ export default function TimetableClient({
   const [editor, setEditor] = useState<Editor | null>(null);
   const [showStudents, setShowStudents] = useState(initial.students.length === 0);
   const [dragOver, setDragOver] = useState<string | null>(null);
+  /** 끌어다 놓은 뒤 잠깐 뜨는 알림: 되돌리기 / 매주로 바꾸기 */
+  const [toast, setToast] = useState<{ text: string; undo?: Body; weekly?: Body } | null>(null);
+  useEffect(() => {
+    if (!toast) return;
+    const id = window.setTimeout(() => setToast(null), 9000);
+    return () => window.clearTimeout(id);
+  }, [toast]);
 
   const entries = useMemo(() => buildEntries(data), [data]);
   const changes = entries.filter((e) => e.status !== "regular").length;
@@ -143,17 +154,29 @@ export default function TimetableClient({
     }
   }
 
-  function onDrop(e: React.DragEvent, weekday: Weekday, rowTime: string) {
+  /** 끌어다 놓기 = 바로 '이번 주만' 저장 (구글 캘린더처럼). 알림에서 되돌리기·매주로 바꾸기 */
+  async function onDrop(e: React.DragEvent, weekday: Weekday, rowTime: string) {
     e.preventDefault();
     setDragOver(null);
     const key = e.dataTransfer.getData("text/plain");
     const entry = entries.find((x) => `${x.student.id}-${x.weekday}` === key);
-    if (!entry || entry.status === "off") return;
-    // 같은 시간대 안에서는 분을 유지, 다른 시간대로 가면 그 칸의 시작 시각
-    const sameRow = entry.weekday === weekday && rowIndex(entry.time, data.rows) === data.rows.indexOf(rowTime);
-    if (sameRow) return;
-    const keepMinutes = rowIndex(entry.time, data.rows) === data.rows.indexOf(rowTime);
-    setEditor({ kind: "entry", entry, toDay: weekday, toTime: keepMinutes ? entry.time : rowTime });
+    if (!entry || entry.status === "off" || busy) return;
+    const ri = data.rows.indexOf(rowTime);
+    if (entry.weekday === weekday && rowIndex(entry.time, data.rows) === ri) return; // 같은 칸
+    const name = entry.student.name;
+    const clash = entry.weekday !== weekday && entries.find((x) => x.student.id === entry.student.id && x.weekday === weekday && x.status !== "off");
+    if (clash) {
+      setToast({ text: `${name}은(는) 이미 ${DAY_LABEL[weekday]}요일 ${short(clash.time)}에 와요. 그 등원을 먼저 바꿔 주세요.` });
+      return;
+    }
+    // 다른 칸으로 가면 그 칸의 시작 시각, 도착 시각 메모는 새 칸에 맞지 않을 수 있어 비움
+    const ok = await save({ action: "moveOnce", studentId: entry.student.id, from: entry.weekday, to: weekday, time: rowTime });
+    if (!ok) return;
+    setToast({
+      text: `${name} → ${DAY_LABEL[weekday]} ${rowLabel(rowTime)} (이번 주만)`,
+      undo: { action: "moveOnce", studentId: entry.student.id, from: weekday, to: entry.weekday, time: entry.time, arrive: entry.arrive },
+      weekly: { action: "moveWeekly", studentId: entry.student.id, from: weekday, to: weekday, time: rowTime },
+    });
   }
 
   return (
@@ -194,16 +217,31 @@ export default function TimetableClient({
 
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <h1 className="font-round text-lg text-hb-navy">
-            {data.week.slice(2, 4)}년 {md(data.week)} ~ {md(addDays(data.week, 4))}
+            {weekLabel(data.week)} <span className="text-sm font-normal text-ink-soft">({md(data.week)} ~ {md(addDays(data.week, 4))})</span>
             {isThisWeek && <span className="no-print ml-2 rounded-full bg-hb-yellow px-2 py-0.5 text-xs text-ink">이번 주</span>}
             {busy && <span className="no-print ml-2 text-xs font-normal text-ink-soft">저장 중…</span>}
           </h1>
           <p className="no-print text-xs text-ink-soft">
-            빈 칸 클릭 = 넣기 · 이름 클릭 = 바꾸기 · 이름 끌어다 놓기 = 옮기기 · <span className="rounded bg-amber-100 px-1">노란색</span> = 이번 주만 변경 ({changes}건)
+            빈 칸 클릭 = 넣기 · 이름 클릭 = 바꾸기 · 이름 끌어다 놓기 = 이번 주만 옮기기 · <span className="rounded bg-amber-100 px-1">노란색</span> = 이번 주만 변경 ({changes}건)
           </p>
         </div>
 
         {error && !editor && <p className="no-print rounded-lg bg-red-50 p-3 text-sm text-red-800">{error}</p>}
+        {changes > 0 && (
+          <div className="no-print flex flex-wrap items-center justify-between gap-2 rounded-xl bg-amber-50 px-4 py-2.5 text-sm ring-1 ring-amber-200">
+            <span>
+              이 주에 <b>{changes}건</b> 바뀌었어요. 다음 주부터도 이대로라면 고정해 두세요.
+            </span>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => window.confirm(`${weekLabel(data.week)} 시간표를 다음 주부터도 그대로 쓸까요? (바뀐 시간이 평소 시간표가 돼요)`) && save({ action: "fixWeek" })}
+              className="rounded-full bg-amber-500 px-4 py-1.5 text-xs font-bold text-white disabled:opacity-50"
+            >
+              📌 이 주 시간표를 앞으로 계속 쓰기
+            </button>
+          </div>
+        )}
 
         <div className="overflow-x-auto rounded-2xl bg-white ring-1 ring-line print:rounded-none print:ring-0">
           <table className="w-full min-w-[900px] table-fixed border-collapse text-sm">
@@ -265,7 +303,7 @@ export default function TimetableClient({
                               }`}
                             >
                               {e.student.name}
-                              {e.time !== rowTime && e.status !== "off" && <span className="ml-0.5 text-[11px]">({short(e.time)})</span>}
+                              {e.status !== "off" && <span className="ml-0.5 text-[11px]">({badge(e)})</span>}
                               {e.status === "off" && <span className="ml-0.5 text-[11px]">쉼</span>}
                             </button>
                           ))}
@@ -290,6 +328,30 @@ export default function TimetableClient({
           <StudentList data={data} onEdit={(s) => setEditor({ kind: "student", student: s })} onAdd={() => setEditor({ kind: "student" })} onBulk={() => setEditor({ kind: "bulk" })} />
         )}
       </main>
+
+      {toast && (
+        <div role="status" className="no-print fixed bottom-5 left-1/2 z-40 flex max-w-[92vw] -translate-x-1/2 items-center gap-3 rounded-full bg-ink px-5 py-3 text-sm text-white shadow-xl">
+          <span>{toast.text}</span>
+          {toast.undo && (
+            <button type="button" disabled={busy} onClick={() => save(toast.undo!).then((ok) => ok && setToast(null))} className="font-bold text-hb-yellow underline">
+              되돌리기
+            </button>
+          )}
+          {toast.weekly && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => save(toast.weekly!).then((ok) => ok && setToast({ text: "매주 이 시간으로 바꿨어요" }))}
+              className="font-bold text-sky-300 underline"
+            >
+              매주로 바꾸기
+            </button>
+          )}
+          <button type="button" onClick={() => setToast(null)} aria-label="알림 닫기" className="text-white/60">
+            ✕
+          </button>
+        </div>
+      )}
 
       {editor && (
         <div className="no-print fixed inset-0 z-50 grid place-items-center bg-black/40 p-4" onClick={() => !busy && setEditor(null)}>
@@ -318,6 +380,20 @@ const PRIMARY = "w-full rounded-full bg-hb-navy py-2.5 text-sm font-bold text-wh
 const SECONDARY = "w-full rounded-full border-2 border-hb-navy py-2 text-sm font-bold text-hb-navy disabled:opacity-50";
 const INPUT = "rounded-lg border border-line px-3 py-2 text-sm";
 
+function ArriveInput({ value, setValue }: { value: string; setValue: (v: string) => void }) {
+  return (
+    <label className="flex items-center gap-2 text-xs text-ink-soft">
+      <span className="shrink-0">실제 도착 (선택)</span>
+      <input type="time" step={600} value={value} onChange={(e) => setValue(e.target.value)} className={`${INPUT} min-w-0 flex-1 py-1`} />
+      {value && (
+        <button type="button" onClick={() => setValue("")} className="underline">
+          지우기
+        </button>
+      )}
+    </label>
+  );
+}
+
 function DayTime({ day, time, setDay, setTime }: { day: Weekday; time: string; setDay: (d: Weekday) => void; setTime: (t: string) => void }) {
   return (
     <div className="flex gap-2">
@@ -333,7 +409,7 @@ function DayTime({ day, time, setDay, setTime }: { day: Weekday; time: string; s
           </button>
         ))}
       </div>
-      <input type="time" step={300} value={time} onChange={(e) => setTime(e.target.value)} className={`${INPUT} min-w-0 flex-1`} />
+      <input type="time" step={600} value={time} onChange={(e) => setTime(e.target.value)} className={`${INPUT} min-w-0 flex-1`} />
     </div>
   );
 }
@@ -357,19 +433,20 @@ function EntryEditor({
 }) {
   const [day, setDay] = useState<Weekday>(toDay ?? entry.weekday);
   const [time, setTime] = useState(toTime ?? entry.time);
+  const [arrive, setArrive] = useState(toTime ? "" : (entry.arrive ?? ""));
   const sid = entry.student.id;
   const here = { studentId: sid, weekday: entry.weekday };
   const moving = day !== entry.weekday;
-  const dirty = moving || time !== entry.time;
+  const dirty = moving || time !== entry.time || (arrive || null) !== entry.arrive;
   // 옮길 요일에 이 학생이 이미 오면 막는다 (덮어쓰지 않게)
   const clash = moving ? entries.find((e) => e.student.id === sid && e.weekday === day && e.status !== "off") : undefined;
   const canRestore = entry.status !== "regular" && (!!entry.regularTime || !!entry.fromWeekday);
 
   const thisWeek = () =>
-    entry.status === "off" && !moving && time === entry.regularTime
+    entry.status === "off" && !moving && time === entry.regularTime && (arrive || null) === entry.arrive
       ? save({ action: "restore", ...here }) // 쉼 → 평소 시간 그대로 오면 되돌리기 (옮긴 짝도 함께)
-      : save({ action: "moveOnce", studentId: sid, from: entry.weekday, to: day, time });
-  const everyWeek = () => save({ action: "moveWeekly", studentId: sid, from: entry.weekday, to: day, time });
+      : save({ action: "moveOnce", studentId: sid, from: entry.weekday, to: day, time, arrive: arrive || null });
+  const everyWeek = () => save({ action: "moveWeekly", studentId: sid, from: entry.weekday, to: day, time, arrive: arrive || null });
 
   return (
     <div className="space-y-3">
@@ -384,6 +461,7 @@ function EntryEditor({
       </div>
 
       <DayTime day={day} time={time} setDay={setDay} setTime={setTime} />
+      <ArriveInput value={arrive} setValue={setArrive} />
       {clash ? (
         <p className="rounded-lg bg-red-50 p-2 text-xs text-red-800">
           이미 {DAY_LABEL[day]}요일 {short(clash.time)}에 등원이 있어요. 그 등원을 먼저 바꾸거나 빼 주세요.
@@ -444,6 +522,7 @@ function AddEditor({ weekday, time: initialTime, data, entries, busy, save }: { 
   const [picked, setPicked] = useState(0);
   const sid = options.some((s) => s.id === picked) ? picked : (options[0]?.id ?? 0);
   const [name, setName] = useState("");
+  const [arrive, setArrive] = useState("");
 
   return (
     <div className="space-y-3">
@@ -456,6 +535,7 @@ function AddEditor({ weekday, time: initialTime, data, entries, busy, save }: { 
         ))}
       </div>
       <DayTime day={day} time={time} setDay={setDay} setTime={setTime} />
+      <ArriveInput value={arrive} setValue={setArrive} />
       {mode === "old" ? (
         options.length ? (
           <select value={sid} onChange={(e) => setPicked(Number(e.target.value))} className={`${INPUT} w-full`}>
@@ -473,10 +553,10 @@ function AddEditor({ weekday, time: initialTime, data, entries, busy, save }: { 
       )}
       {mode === "old" ? (
         <div className="grid grid-cols-2 gap-2">
-          <button type="button" disabled={busy || !sid || !time} onClick={() => save({ action: "addVisit", studentId: sid, weekday: day, time, weekly: false })} className={PRIMARY}>
+          <button type="button" disabled={busy || !sid || !time} onClick={() => save({ action: "addVisit", studentId: sid, weekday: day, time, weekly: false, arrive: arrive || null })} className={PRIMARY}>
             이번 주만
           </button>
-          <button type="button" disabled={busy || !sid || !time} onClick={() => save({ action: "addVisit", studentId: sid, weekday: day, time, weekly: true })} className={SECONDARY}>
+          <button type="button" disabled={busy || !sid || !time} onClick={() => save({ action: "addVisit", studentId: sid, weekday: day, time, weekly: true, arrive: arrive || null })} className={SECONDARY}>
             매주
           </button>
         </div>
@@ -484,7 +564,7 @@ function AddEditor({ weekday, time: initialTime, data, entries, busy, save }: { 
         <button
           type="button"
           disabled={busy || !name.trim() || !time}
-          onClick={() => save({ action: "saveStudent", name, note: "", slots: [{ weekday: day, time }] })}
+          onClick={() => save({ action: "saveStudent", name, note: "", slots: [{ weekday: day, time, arrive: arrive || null }] })}
           className={PRIMARY}
         >
           새 학생 등록 (매주 {DAY_LABEL[day]} {time ? short(time) : ""})
@@ -502,18 +582,34 @@ function StudentEditor({ student, data, busy, save }: { student?: Student; data:
     if (student) data.regular.filter((r) => r.studentId === student.id).forEach((r) => (t[r.weekday] = r.time));
     return t;
   });
-  const slots = DAYS.filter((d) => times[d]).map((d) => ({ weekday: d, time: times[d] }));
+  const [arrives, setArrives] = useState<Record<number, string>>(() => {
+    const t: Record<number, string> = {};
+    if (student) data.regular.filter((r) => r.studentId === student.id && r.arrive).forEach((r) => (t[r.weekday] = r.arrive!));
+    return t;
+  });
+  const slots = DAYS.filter((d) => times[d]).map((d) => ({ weekday: d, time: times[d], arrive: arrives[d] || null }));
   return (
     <div className="space-y-3">
       <p className="text-lg font-extrabold">{student ? `${student.name} · 평소 시간표` : "학생 추가"}</p>
       <input value={name} onChange={(e) => setName(e.target.value)} maxLength={20} placeholder="이름" className={`${INPUT} w-full`} />
       <input value={note} onChange={(e) => setNote(e.target.value)} maxLength={60} placeholder="메모 (선택) 예) 초3 · 파닉스" className={`${INPUT} w-full`} />
       <div className="space-y-1.5">
-        <p className="text-xs font-bold text-ink-soft">매주 오는 요일만 시간을 넣어 주세요</p>
+        <p className="text-xs font-bold text-ink-soft">매주 오는 요일만 수업 시간을 넣어 주세요 (도착이 다르면 오른쪽에)</p>
         {DAYS.map((d) => (
           <label key={d} className="flex items-center gap-2 text-sm">
             <span className="w-8 font-bold">{DAY_LABEL[d]}</span>
-            <input type="time" step={300} value={times[d] ?? ""} onChange={(e) => setTimes((t) => ({ ...t, [d]: e.target.value }))} className={`${INPUT} flex-1 py-1.5`} />
+            <input type="time" step={600} value={times[d] ?? ""} onChange={(e) => setTimes((t) => ({ ...t, [d]: e.target.value }))} className={`${INPUT} min-w-0 flex-1 py-1.5`} />
+            {times[d] && (
+              <input
+                type="time"
+                step={300}
+                value={arrives[d] ?? ""}
+                onChange={(e) => setArrives((t) => ({ ...t, [d]: e.target.value }))}
+                title="실제 도착 (선택)"
+                aria-label={`${DAY_LABEL[d]}요일 실제 도착 (선택)`}
+                className={`${INPUT} w-28 py-1.5 text-xs`}
+              />
+            )}
             {times[d] ? (
               <button type="button" onClick={() => setTimes((t) => ({ ...t, [d]: "" }))} className="w-12 text-xs text-ink-soft underline">
                 안 옴
@@ -626,7 +722,7 @@ function BulkEditor({ busy, save }: { busy: boolean; save: Save }) {
       <p className="text-xs leading-5 text-ink-soft">
         한 줄에 한 명씩: <b>이름 요일시간 요일시간…</b> (1~9시는 오후로 봐요 · 한 번에 {MAX_BULK_ROWS}명까지)
         <br />
-        예) <code className="rounded bg-bg-soft px-1">홍길동 월2 화2 목4:20</code>
+        예) <code className="rounded bg-bg-soft px-1">홍길동 월2 화2 목4:20</code> · 도착이 다르면 <code className="rounded bg-bg-soft px-1">월3(1:40)</code>
       </p>
       <textarea
         value={text}
@@ -639,7 +735,7 @@ function BulkEditor({ busy, save }: { busy: boolean; save: Save }) {
         <ul className="max-h-40 space-y-1 overflow-y-auto rounded-lg bg-bg-soft p-2 text-xs">
           {parsed.map((p, i) => (
             <li key={i}>
-              <b>{p.name}</b> — {p.slots.length ? p.slots.map((s) => `${DAY_LABEL[s.weekday]} ${short(s.time)}`).join(" · ") : <span className="text-red-700">요일·시간을 못 찾았어요 (이름만 등록)</span>}
+              <b>{p.name}</b> — {p.slots.length ? p.slots.map((s) => `${DAY_LABEL[s.weekday]} ${short(s.time)}${s.arrive ? `(${short(s.arrive)})` : ""}`).join(" · ") : <span className="text-red-700">요일·시간을 못 찾았어요 (이름만 등록)</span>}
             </li>
           ))}
         </ul>
@@ -689,7 +785,7 @@ function StudentList({ data, onEdit, onAdd, onBulk }: { data: WeekData; onEdit: 
                   <p className="font-bold">
                     {s.name} {s.note && <span className="text-xs font-normal text-ink-soft">· {s.note}</span>}
                   </p>
-                  <p className="text-xs text-ink-soft">{reg.length ? reg.map((r) => `${DAY_LABEL[r.weekday]} ${short(r.time)}`).join(" · ") : "평소 등원 없음"}</p>
+                  <p className="text-xs text-ink-soft">{reg.length ? reg.map((r) => `${DAY_LABEL[r.weekday]} ${short(r.time)}${r.arrive ? `(${short(r.arrive)})` : ""}`).join(" · ") : "평소 등원 없음"}</p>
                 </button>
               </li>
             );

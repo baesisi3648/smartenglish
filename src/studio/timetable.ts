@@ -7,7 +7,8 @@ export { normalizeWeek, weekStartOf };
 /**
  * 등원 시간표 (Neon Postgres, Vercel Storage로 연결 — DATABASE_URL).
  * - tt_students: 학생 (이름·메모). 지우면 active=false (기록 보존)
- * - tt_regular: 평소 등원 — 요일(1=월 … 5=금)과 시각("HH:MM"), 학생·요일당 하나
+ * - tt_regular: 평소 등원 — 요일(1=월 … 5=금)과 수업 시각("HH:MM", 시간표 칸), 학생·요일당 하나
+ *     arrive: 수업 시각과 다르게 실제로 오는 시각 (종이 시간표의 괄호, 예: 3시 수업인데 1:40 도착)
  * - tt_overrides: 이번 주만 바뀐 것 — 그 주 월요일 + 요일 + 시각(null = 그날 쉼)
  *     평소 등원이 있는 요일: 시각 = 시간 변경, null = 쉼 / 평소 등원이 없는 요일: 시각 = 추가 등원
  *     from_weekday: 다른 요일에서 옮겨 온 등원이면 원래 요일 (되돌리기 때 두 칸을 함께 되돌림)
@@ -18,8 +19,8 @@ export { normalizeWeek, weekStartOf };
 
 export type Weekday = 1 | 2 | 3 | 4 | 5;
 export type Student = { id: number; name: string; note: string };
-export type Slot = { studentId: number; weekday: Weekday; time: string };
-export type Override = { studentId: number; weekday: Weekday; time: string | null; fromWeekday: Weekday | null };
+export type Slot = { studentId: number; weekday: Weekday; time: string; arrive: string | null };
+export type Override = { studentId: number; weekday: Weekday; time: string | null; arrive: string | null; fromWeekday: Weekday | null };
 export type WeekData = { week: string; students: Student[]; regular: Slot[]; overrides: Override[]; rows: string[] };
 
 /** 시간표 왼쪽 시간 칸 기본값: 1시~7시 */
@@ -80,6 +81,8 @@ function ensureSchema() {
       PRIMARY KEY (student_id, week_start, weekday)
     )`;
     await sql`ALTER TABLE tt_overrides ADD COLUMN IF NOT EXISTS from_weekday SMALLINT`;
+    await sql`ALTER TABLE tt_overrides ADD COLUMN IF NOT EXISTS arrive TEXT`;
+    await sql`ALTER TABLE tt_regular ADD COLUMN IF NOT EXISTS arrive TEXT`;
     await sql`CREATE TABLE IF NOT EXISTS tt_settings (key TEXT PRIMARY KEY, value JSONB NOT NULL)`;
   })().catch((e) => {
     ready = null; // 다음 요청에서 다시 시도
@@ -105,8 +108,8 @@ export async function getWeek(week: string): Promise<WeekData> {
   const sql = db();
   const [students, regular, overrides, settings] = await Promise.all([
     sql`SELECT id, name, note FROM tt_students WHERE active ORDER BY name`,
-    sql`SELECT r.student_id, r.weekday, r.time FROM tt_regular r JOIN tt_students s ON s.id = r.student_id WHERE s.active`,
-    sql`SELECT o.student_id, o.weekday, o.time, o.from_weekday FROM tt_overrides o JOIN tt_students s ON s.id = o.student_id
+    sql`SELECT r.student_id, r.weekday, r.time, r.arrive FROM tt_regular r JOIN tt_students s ON s.id = r.student_id WHERE s.active`,
+    sql`SELECT o.student_id, o.weekday, o.time, o.arrive, o.from_weekday FROM tt_overrides o JOIN tt_students s ON s.id = o.student_id
         WHERE s.active AND o.week_start = ${week}`,
     sql`SELECT value FROM tt_settings WHERE key = 'rows'`,
   ]);
@@ -114,11 +117,12 @@ export async function getWeek(week: string): Promise<WeekData> {
   return {
     week,
     students: students.map((r) => ({ id: r.id as number, name: r.name as string, note: r.note as string })),
-    regular: regular.map((r) => ({ studentId: r.student_id as number, weekday: r.weekday as Weekday, time: r.time as string })),
+    regular: regular.map((r) => ({ studentId: r.student_id as number, weekday: r.weekday as Weekday, time: r.time as string, arrive: (r.arrive as string | null) ?? null })),
     overrides: overrides.map((r) => ({
       studentId: r.student_id as number,
       weekday: r.weekday as Weekday,
       time: (r.time as string | null) ?? null,
+      arrive: (r.arrive as string | null) ?? null,
       fromWeekday: (r.from_weekday as Weekday | null) ?? null,
     })),
     rows: Array.isArray(saved) && saved.length && saved.every(isTime) ? (saved as string[]) : DEFAULT_ROWS,
@@ -130,15 +134,18 @@ async function stateOf(studentId: number, week: string) {
   const sql = db();
   const [st, reg, ov] = await Promise.all([
     sql`SELECT 1 FROM tt_students WHERE id = ${studentId} AND active`,
-    sql`SELECT weekday, time FROM tt_regular WHERE student_id = ${studentId}`,
+    sql`SELECT weekday, time, arrive FROM tt_regular WHERE student_id = ${studentId}`,
     sql`SELECT weekday, time, from_weekday FROM tt_overrides WHERE student_id = ${studentId} AND week_start = ${week}`,
   ]);
   if (!st.length) throw new TimetableError("NOT_FOUND", "학생을 찾을 수 없습니다.", 404);
   const regular = new Map(reg.map((r) => [r.weekday as number, r.time as string]));
+  const regArrive = new Map(reg.map((r) => [r.weekday as number, (r.arrive as string | null) ?? null]));
   const over = new Map(ov.map((r) => [r.weekday as number, { time: (r.time as string | null) ?? null, from: (r.from_weekday as number | null) ?? null }]));
   /** 그 요일에 실제로 오는 시각 (안 오면 null) */
   const effective = (d: number) => (over.has(d) ? over.get(d)!.time : (regular.get(d) ?? null));
-  return { regular, over, effective };
+  /** 평소 도착 시각 (없으면 null) */
+  const arriveOf = (d: number) => regArrive.get(d) ?? null;
+  return { regular, over, effective, arriveOf };
 }
 
 const conflict = (d: number, time: string) =>
@@ -147,11 +154,14 @@ const conflict = (d: number, time: string) =>
 /* ─────────── 쓰기 (각 함수 = 한 번의 변경 = 한 트랜잭션) ─────────── */
 
 /** 학생 추가·수정: 이름·메모 + 평소 등원(요일별 시각, 없으면 그 요일은 안 옴) */
-export async function saveStudent(input: { id?: number; name: string; note: string; slots: { weekday: Weekday; time: string }[] }) {
+export type SlotInput = { weekday: Weekday; time: string; arrive?: string | null };
+
+export async function saveStudent(input: { id?: number; name: string; note: string; slots: SlotInput[] }) {
   await ensureSchema();
   const sql = db();
   const days = input.slots.map((s) => s.weekday);
   const times = input.slots.map((s) => s.time);
+  const arrives = input.slots.map((s) => s.arrive ?? null);
   if (input.id) {
     const ok = await sql`SELECT 1 FROM tt_students WHERE id = ${input.id} AND active`;
     if (!ok.length) throw new TimetableError("NOT_FOUND", "학생을 찾을 수 없습니다.", 404);
@@ -166,13 +176,13 @@ export async function saveStudent(input: { id?: number; name: string; note: stri
       ? sql`UPDATE tt_students SET name = ${input.name}, note = ${input.note} WHERE id = ${id}`
       : sql`INSERT INTO tt_students (id, name, note) VALUES (${id}, ${input.name}, ${input.note})`,
     sql`DELETE FROM tt_regular WHERE student_id = ${id}`,
-    sql`INSERT INTO tt_regular (student_id, weekday, time) SELECT ${id}, d, t FROM unnest(${days}::smallint[], ${times}::text[]) AS x(d, t)`,
+    sql`INSERT INTO tt_regular (student_id, weekday, time, arrive) SELECT ${id}, d, t, a FROM unnest(${days}::smallint[], ${times}::text[], ${arrives}::text[]) AS x(d, t, a)`,
   ]);
   return id;
 }
 
 /** 여러 명 한 번에 등록 — 전부 저장되거나 하나도 저장되지 않는다 */
-export async function bulkAdd(items: { name: string; slots: { weekday: Weekday; time: string }[] }[]) {
+export async function bulkAdd(items: { name: string; slots: SlotInput[] }[]) {
   await ensureSchema();
   if (items.length > MAX_BULK) throw new TimetableError("TOO_MANY", `한 번에 ${MAX_BULK}명까지 등록할 수 있어요.`);
   const sql = db();
@@ -185,16 +195,18 @@ export async function bulkAdd(items: { name: string; slots: { weekday: Weekday; 
   const sIds: number[] = [];
   const days: number[] = [];
   const times: string[] = [];
+  const arrives: (string | null)[] = [];
   items.forEach((it, i) =>
     it.slots.forEach((s) => {
       sIds.push(ids[i]);
       days.push(s.weekday);
       times.push(s.time);
+      arrives.push(s.arrive ?? null);
     }),
   );
   await sql.transaction([
     sql`INSERT INTO tt_students (id, name) SELECT i, n FROM unnest(${ids}::int[], ${names}::text[]) AS x(i, n)`,
-    sql`INSERT INTO tt_regular (student_id, weekday, time) SELECT s, d, t FROM unnest(${sIds}::int[], ${days}::smallint[], ${times}::text[]) AS x(s, d, t)`,
+    sql`INSERT INTO tt_regular (student_id, weekday, time, arrive) SELECT s, d, t, a FROM unnest(${sIds}::int[], ${days}::smallint[], ${times}::text[], ${arrives}::text[]) AS x(s, d, t, a)`,
   ]);
 }
 
@@ -204,15 +216,15 @@ export async function removeStudent(id: number) {
 }
 
 /** 이번 주만 옮기기·시간 바꾸기 (같은 요일이면 시각만) */
-export async function moveOnce(studentId: number, week: string, from: Weekday, to: Weekday, time: string) {
+export async function moveOnce(studentId: number, week: string, from: Weekday, to: Weekday, time: string, arrive: string | null = null) {
   await ensureSchema();
   const sql = db();
   const s = await stateOf(studentId, week);
   if (from === to) {
-    await (time === s.regular.get(from)
+    await (time === s.regular.get(from) && arrive === s.arriveOf(from)
       ? sql`DELETE FROM tt_overrides WHERE student_id = ${studentId} AND week_start = ${week} AND weekday = ${from}`
-      : sql`INSERT INTO tt_overrides (student_id, week_start, weekday, time, from_weekday) VALUES (${studentId}, ${week}, ${from}, ${time}, ${s.over.get(from)?.from ?? null})
-            ON CONFLICT (student_id, week_start, weekday) DO UPDATE SET time = EXCLUDED.time, updated_at = now()`);
+      : sql`INSERT INTO tt_overrides (student_id, week_start, weekday, time, arrive, from_weekday) VALUES (${studentId}, ${week}, ${from}, ${time}, ${arrive}, ${s.over.get(from)?.from ?? null})
+            ON CONFLICT (student_id, week_start, weekday) DO UPDATE SET time = EXCLUDED.time, arrive = EXCLUDED.arrive, updated_at = now()`);
     return;
   }
   const busyTo = s.effective(to);
@@ -225,15 +237,15 @@ export async function moveOnce(studentId: number, week: string, from: Weekday, t
       ? sql`INSERT INTO tt_overrides (student_id, week_start, weekday, time, from_weekday) VALUES (${studentId}, ${week}, ${from}, NULL, NULL)
             ON CONFLICT (student_id, week_start, weekday) DO UPDATE SET time = NULL, from_weekday = NULL, updated_at = now()`
       : sql`DELETE FROM tt_overrides WHERE student_id = ${studentId} AND week_start = ${week} AND weekday = ${from}`,
-    backHome && time === s.regular.get(to)
+    backHome && time === s.regular.get(to) && arrive === s.arriveOf(to)
       ? sql`DELETE FROM tt_overrides WHERE student_id = ${studentId} AND week_start = ${week} AND weekday = ${to}`
-      : sql`INSERT INTO tt_overrides (student_id, week_start, weekday, time, from_weekday) VALUES (${studentId}, ${week}, ${to}, ${time}, ${backHome ? null : origin})
-            ON CONFLICT (student_id, week_start, weekday) DO UPDATE SET time = EXCLUDED.time, from_weekday = EXCLUDED.from_weekday, updated_at = now()`,
+      : sql`INSERT INTO tt_overrides (student_id, week_start, weekday, time, arrive, from_weekday) VALUES (${studentId}, ${week}, ${to}, ${time}, ${arrive}, ${backHome ? null : origin})
+            ON CONFLICT (student_id, week_start, weekday) DO UPDATE SET time = EXCLUDED.time, arrive = EXCLUDED.arrive, from_weekday = EXCLUDED.from_weekday, updated_at = now()`,
   ]);
 }
 
 /** 매주 옮기기·시간 바꾸기: 평소 시간표를 바꾸고 그 주의 해당 변경은 지운다 */
-export async function moveWeekly(studentId: number, week: string, from: Weekday, to: Weekday, time: string) {
+export async function moveWeekly(studentId: number, week: string, from: Weekday, to: Weekday, time: string, arrive: string | null = null) {
   await ensureSchema();
   const sql = db();
   const s = await stateOf(studentId, week);
@@ -242,32 +254,32 @@ export async function moveWeekly(studentId: number, week: string, from: Weekday,
   if (from !== to && s.regular.has(to)) throw conflict(to, s.regular.get(to)!);
   await sql.transaction([
     sql`DELETE FROM tt_regular WHERE student_id = ${studentId} AND weekday = ${from} AND ${from !== to}`,
-    sql`INSERT INTO tt_regular (student_id, weekday, time) VALUES (${studentId}, ${to}, ${time})
-        ON CONFLICT (student_id, weekday) DO UPDATE SET time = EXCLUDED.time`,
+    sql`INSERT INTO tt_regular (student_id, weekday, time, arrive) VALUES (${studentId}, ${to}, ${time}, ${arrive})
+        ON CONFLICT (student_id, weekday) DO UPDATE SET time = EXCLUDED.time, arrive = EXCLUDED.arrive`,
     sql`DELETE FROM tt_overrides WHERE student_id = ${studentId} AND week_start = ${week}
         AND (weekday IN (${from}, ${to}) OR from_weekday IN (${from}, ${to}))`,
   ]);
 }
 
 /** 빈 요일에 넣기 — 이번 주만(추가 등원) 또는 매주(평소 등원) */
-export async function addVisit(studentId: number, week: string, weekday: Weekday, time: string, weekly: boolean) {
+export async function addVisit(studentId: number, week: string, weekday: Weekday, time: string, weekly: boolean, arrive: string | null = null) {
   await ensureSchema();
   const sql = db();
   const s = await stateOf(studentId, week);
   if (weekly) {
     if (s.regular.has(weekday)) throw conflict(weekday, s.regular.get(weekday)!);
     await sql.transaction([
-      sql`INSERT INTO tt_regular (student_id, weekday, time) VALUES (${studentId}, ${weekday}, ${time})`,
+      sql`INSERT INTO tt_regular (student_id, weekday, time, arrive) VALUES (${studentId}, ${weekday}, ${time}, ${arrive})`,
       sql`DELETE FROM tt_overrides WHERE student_id = ${studentId} AND week_start = ${week} AND weekday = ${weekday}`,
     ]);
     return;
   }
   const busy = s.effective(weekday);
   if (busy) throw conflict(weekday, busy);
-  await (time === s.regular.get(weekday)
+  await (time === s.regular.get(weekday) && arrive === s.arriveOf(weekday)
     ? sql`DELETE FROM tt_overrides WHERE student_id = ${studentId} AND week_start = ${week} AND weekday = ${weekday}`
-    : sql`INSERT INTO tt_overrides (student_id, week_start, weekday, time, from_weekday) VALUES (${studentId}, ${week}, ${weekday}, ${time}, NULL)
-          ON CONFLICT (student_id, week_start, weekday) DO UPDATE SET time = EXCLUDED.time, from_weekday = NULL, updated_at = now()`);
+    : sql`INSERT INTO tt_overrides (student_id, week_start, weekday, time, arrive, from_weekday) VALUES (${studentId}, ${week}, ${weekday}, ${time}, ${arrive}, NULL)
+          ON CONFLICT (student_id, week_start, weekday) DO UPDATE SET time = EXCLUDED.time, arrive = EXCLUDED.arrive, from_weekday = NULL, updated_at = now()`);
 }
 
 /** 이번 주 그 요일 등원 빼기: 평소 등원이면 '쉼', 추가·옮겨 온 등원이면 지움 */
@@ -299,6 +311,24 @@ export async function removeRegularDay(studentId: number, week: string, weekday:
   await sql.transaction([
     sql`DELETE FROM tt_regular WHERE student_id = ${studentId} AND weekday = ${weekday}`,
     sql`DELETE FROM tt_overrides WHERE student_id = ${studentId} AND week_start = ${week} AND (weekday = ${weekday} OR from_weekday = ${weekday})`,
+  ]);
+}
+
+/**
+ * 이번 주 시간표를 앞으로 계속 쓰기: 그 주의 변경(시간 변경·쉼·옮김·추가)을 평소 시간표에 반영하고 그 주 변경 기록은 지운다.
+ * 다른 주에 따로 적어 둔 변경은 그대로 둔다.
+ */
+export async function fixWeek(week: string) {
+  await ensureSchema();
+  const sql = db();
+  await sql.transaction([
+    sql`DELETE FROM tt_regular r USING tt_overrides o
+        WHERE o.week_start = ${week} AND o.time IS NULL AND r.student_id = o.student_id AND r.weekday = o.weekday`,
+    sql`INSERT INTO tt_regular (student_id, weekday, time, arrive)
+        SELECT o.student_id, o.weekday, o.time, o.arrive FROM tt_overrides o JOIN tt_students s ON s.id = o.student_id
+        WHERE o.week_start = ${week} AND o.time IS NOT NULL AND s.active
+        ON CONFLICT (student_id, weekday) DO UPDATE SET time = EXCLUDED.time, arrive = EXCLUDED.arrive`,
+    sql`DELETE FROM tt_overrides WHERE week_start = ${week}`,
   ]);
 }
 
