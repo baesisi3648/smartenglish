@@ -8,7 +8,7 @@ import { academy } from "@/content/academy";
 import PasteTest from "./paste-test";
 
 export const metadata: Metadata = {
-  title: "붙여넣기 시험 | 블로그 스튜디오",
+  title: "붙여넣기 시험 | 스튜디오",
   robots: { index: false, follow: false },
 };
 

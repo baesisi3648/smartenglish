@@ -142,7 +142,7 @@ export default function PasteTest({ placeUrl }: { placeUrl: string }) {
       <div className="mx-auto max-w-2xl space-y-5">
         <div>
           <Link href="/studio" className="text-sm font-bold text-hb-navy underline">
-            ← 블로그 스튜디오
+            ← 스튜디오
           </Link>
           <h1 className="mt-2 font-display text-2xl text-hb-navy">네이버 붙여넣기 시험</h1>
           <p className="mt-2 text-sm leading-6 text-ink-soft">

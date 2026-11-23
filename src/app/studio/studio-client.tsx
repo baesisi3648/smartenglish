@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
+import StudioHeader from "./studio-header";
 import type { PostType } from "@/studio/post-types";
 import type { Plan, PlanIdea, TypeStat } from "@/studio/planner";
 import type { QuickIdea } from "@/studio/quick-ideas";
@@ -563,24 +564,14 @@ export default function StudioClient({
 
   return (
     <div className="min-h-dvh bg-bg-soft">
-      <header className="border-b-[3px] border-hb-blue bg-white">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4">
-          <div>
-            <p className="font-display text-xl text-hb-navy">블로그 스튜디오</p>
-          </div>
-          <div className="flex items-center gap-4 text-sm font-bold text-hb-navy">
-            <Link href="/studio/report" className="rounded-full bg-bg-soft px-3 py-1.5 ring-1 ring-line">
-              📊 분석 리포트
-            </Link>
-            <Link href="/" className="underline">
-              홈페이지
-            </Link>
-            <form action={logout}>
-              <button className="text-ink-soft underline">로그아웃</button>
-            </form>
-          </div>
-        </div>
-      </header>
+      <StudioHeader active="blog">
+        <Link href="/" className="underline">
+          홈페이지
+        </Link>
+        <form action={logout}>
+          <button className="text-ink-soft underline">로그아웃</button>
+        </form>
+      </StudioHeader>
 
       {/* PC 미리보기를 고르면 결과 칸을 블로그 PC 본문 폭(약 800px)만큼 넓힌다 */}
       <div

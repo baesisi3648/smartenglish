@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Suspense } from "react";
 import { cookies } from "next/headers";
 import Link from "next/link";
+import StudioHeader from "../studio-header";
 import { redirect } from "next/navigation";
 import { connection } from "next/server";
 import { passwordConfigured, verifySessionToken, SESSION_COOKIE } from "@/studio/auth";
@@ -148,16 +149,7 @@ async function Report() {
 
   return (
     <div className="min-h-dvh bg-bg-soft">
-      <header className="border-b-[3px] border-hb-blue bg-white">
-        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-4">
-          <div>
-            <p className="font-display text-xl text-hb-navy">블로그 분석 리포트</p>
-          </div>
-          <Link href="/studio" className="text-sm font-bold text-hb-navy underline">
-            ← 블로그 스튜디오
-          </Link>
-        </div>
-      </header>
+      <StudioHeader active="report" />
 
       <main className="mx-auto max-w-6xl space-y-5 px-4 py-6">
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">

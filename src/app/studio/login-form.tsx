@@ -15,7 +15,7 @@ export default function LoginForm() {
         <Image src="/brand/boy.png" width={48} height={97} alt="" aria-hidden />
         <Image src="/brand/girl.png" width={45} height={96} alt="" aria-hidden />
       </div>
-      <h1 className="mt-4 text-center font-display text-2xl text-hb-navy">블로그 스튜디오</h1>
+      <h1 className="mt-4 text-center font-display text-2xl text-hb-navy">스튜디오</h1>
       <p className="mt-1 text-center text-sm text-ink-soft">관리자 비밀번호를 입력해 주세요</p>
       <label className="mt-6 block text-sm font-bold">
         비밀번호

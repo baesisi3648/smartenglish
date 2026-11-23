@@ -14,7 +14,7 @@ import LoginForm from "./login-form";
 import { logout } from "./actions";
 
 export const metadata: Metadata = {
-  title: "블로그 스튜디오 | 스마트해법영어 백운밸리점",
+  title: "스튜디오 | 스마트해법영어 백운밸리점",
   robots: { index: false, follow: false },
 };
 
@@ -55,7 +55,7 @@ async function Gate() {
     return (
       <Center>
         <div className="max-w-md rounded-3xl border-2 border-hb-navy bg-white p-8 text-center shadow-[6px_6px_0_var(--hb-blue)]">
-          <h1 className="font-display text-2xl text-hb-navy">블로그 스튜디오</h1>
+          <h1 className="font-display text-2xl text-hb-navy">스튜디오</h1>
           <p className="mt-3 text-[15px] leading-7 text-ink-soft">
             글 생성은 원장님 PC의 AI(ChatGPT·Claude)로 동작합니다.
             <br />
