@@ -20,7 +20,6 @@ import {
   SOURCE_PERIODS,
   TOP_POSTS_OCT,
   TOP_POSTS_OCT_TOTAL,
-  UPDATED,
   dailySeries,
 } from "@/studio/report-data";
 import { DailyChart, MonthlyBars } from "./charts";
@@ -153,9 +152,6 @@ async function Report() {
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-4">
           <div>
             <p className="font-display text-xl text-hb-navy">블로그 분석 리포트</p>
-            <p className="text-xs text-ink-soft">
-              {daily[0].date.replaceAll("-", ".")} ~ {daily[daily.length - 1].date.replaceAll("-", ".")} · {UPDATED} 기준
-            </p>
           </div>
           <Link href="/studio" className="text-sm font-bold text-hb-navy underline">
             ← 블로그 스튜디오

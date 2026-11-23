@@ -567,7 +567,6 @@ export default function StudioClient({
         <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4">
           <div>
             <p className="font-display text-xl text-hb-navy">블로그 스튜디오</p>
-            <p className="text-xs text-ink-soft">사진 + 주제 → 백운밸리점 블로그 스타일 초안</p>
           </div>
           <div className="flex items-center gap-4 text-sm font-bold text-hb-navy">
             <Link href="/studio/report" className="rounded-full bg-bg-soft px-3 py-1.5 ring-1 ring-line">
