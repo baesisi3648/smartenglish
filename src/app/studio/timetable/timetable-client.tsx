@@ -30,7 +30,17 @@ const md = (iso: string) => `${Number(iso.slice(5, 7))}.${Number(iso.slice(8, 10
 /** 그 주 월요일 기준 "26년 11월 4주차" */
 const weekLabel = (mon: string) => `${mon.slice(2, 4)}년 ${Number(mon.slice(5, 7))}월 ${Math.floor((Number(mon.slice(8, 10)) - 1) / 7) + 1}주차`;
 /** 칸 안 이름 옆 괄호: 언제나 오는 시각 — 실제 도착 시각이 있으면 그것, 없으면 수업 시각 (10분 단위로 다르니 정각도 표시) */
-const badge = (e: { time: string; arrive: string | null }) => short(e.arrive ?? e.time);
+/** 실제로 오는 시각: 도착 시각이 따로 있으면 그것, 없으면 수업 시각 — 시간표 칸도 이 시각으로 정한다 */
+const placeOf = (e: { time: string; arrive: string | null }) => e.arrive ?? e.time;
+/**
+ * 이름 옆 괄호: 오는 시각. 바뀐 경우엔 "원래 → 바뀐" (예: 3:00 → 1:40)
+ * - 도착 시각이 수업 시각과 다름 / 이번 주만 시간이 바뀜(평소 시각과 다름)
+ */
+const badge = (e: { time: string; arrive: string | null; status: Status; regularTime?: string }) => {
+  const now = placeOf(e);
+  const before = e.arrive && e.arrive !== e.time ? e.time : e.status === "moved" && e.regularTime && e.regularTime !== now ? e.regularTime : null;
+  return before ? `${short(before)} → ${short(now)}` : short(now);
+};
 const plusHour = (t: string) => `${String(Math.min(23, hourOf(t) + 1)).padStart(2, "0")}:${t.slice(3)}`;
 /** 학생 시각이 들어갈 칸: 시각보다 같거나 이른 칸 중 마지막 (첫 칸보다 이르면 첫 칸) */
 const rowIndex = (time: string, rows: string[]) => {
@@ -52,7 +62,7 @@ function buildEntries(d: WeekData): Entry[] {
       } else if (reg) out.push({ student: s, weekday: day, time: reg.time, arrive: reg.arrive, status: "regular", regularTime: reg.time });
     }
   }
-  return out.sort((a, b) => a.time.localeCompare(b.time) || a.student.name.localeCompare(b.student.name, "ko"));
+  return out.sort((a, b) => placeOf(a).localeCompare(placeOf(b)) || a.student.name.localeCompare(b.student.name, "ko"));
 }
 
 /** 읽기·변경 모두 POST (출처·로그인 검사를 같은 규칙으로). 끝나면 그 주 시간표 전체가 돌아온다 */
@@ -162,7 +172,7 @@ export default function TimetableClient({
     const entry = entries.find((x) => `${x.student.id}-${x.weekday}` === key);
     if (!entry || entry.status === "off" || busy) return;
     const ri = data.rows.indexOf(rowTime);
-    if (entry.weekday === weekday && rowIndex(entry.time, data.rows) === ri) return; // 같은 칸
+    if (entry.weekday === weekday && rowIndex(placeOf(entry), data.rows) === ri) return; // 같은 칸
     const name = entry.student.name;
     const clash = entry.weekday !== weekday && entries.find((x) => x.student.id === entry.student.id && x.weekday === weekday && x.status !== "off");
     if (clash) {
@@ -264,7 +274,7 @@ export default function TimetableClient({
                 <tr key={rowTime} className="align-top">
                   <th className="border-t border-line p-2 text-center text-sm font-bold text-ink-soft">{rowLabel(rowTime)}</th>
                   {DAYS.map((d) => {
-                    const cell = entries.filter((e) => e.weekday === d && rowIndex(e.time, data.rows) === ri);
+                    const cell = entries.filter((e) => e.weekday === d && rowIndex(placeOf(e), data.rows) === ri);
                     const count = cell.filter((e) => e.status !== "off").length;
                     const over = count > capacity;
                     const key = `${d}-${rowTime}`;
