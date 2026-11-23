@@ -19,7 +19,6 @@ import {
   TOP_POSTS_OCT,
   TOP_POSTS_OCT_TOTAL,
   UPDATED,
-  WANTED,
   dailySeries,
 } from "@/studio/report-data";
 import { DailyChart, MonthlyBars } from "./charts";
@@ -93,19 +92,53 @@ async function Report() {
     },
   ];
 
-  const insights = [
-    `📈 11월은 22일까지 ${nov}회로 10월 전체(${oct}회)의 약 ${(nov / oct).toFixed(1)}배, 올해 5월(106회)보다도 많습니다. (10월 순방문자는 ${octM.visitors}명이었어요.) 글 수는 10월 ${octPosts}편, 11월 ${novPosts}편으로 같았는데, 11월 글은 제목·본문에 '백운호수초·덕장중'처럼 동네 학교 이름이 들어갔어요.`,
-    `📝 조회가 많은 날은 대부분 글 올린 날 전후입니다 (${top
-      .filter((d) => d.date >= "2026-11-01")
-      .map((d) => `${d.label} ${d.views}회`)
-      .join(", ")}). 글이 없던 10월 19~25일 주는 일주일에 2회뿐이었어요. 주 2회 꾸준히 올리는 게 가장 확실합니다.`,
-    `🔎 검색으로 들어온 방문은 10월 ${searchShare[0]}% → 최근 주 ${searchShare[2]}%이고, 검색어 대부분이 '백운밸리 해법영어', '스마트해법 태블릿'처럼 학원 이름이에요. 이미 아는 학부모는 찾아오지만, 새 학부모를 데려오는 동네·학교 검색은 아직 적습니다.`,
-    "📍 네이버 지도(플레이스)에서 블로그로 넘어온 방문이 13~19%로 꾸준합니다. '청계동 영어학원'을 지도에서 검색한 학부모가 플레이스 → 블로그로 들어왔어요. 플레이스에 블로그 새 글이 잘 보이게 유지하세요.",
-    "🎃 10월 검색 유입의 절반이 할로윈 관련 검색이었고, 작년(2025.10) '할러윈 이벤트' 글이 올해 10월 조회 2위였습니다. 시즌 정보 글은 해마다 다시 읽혀요. 크리스마스·겨울방학·새 학기 글을 미리 써 두면 좋습니다.",
-    `👥 90일 조회 ${fmt(total90)}회 중 이웃이 본 것은 ${NEIGHBOR_VIEWS_90D}회입니다. 새 글 알림으로 오는 방문이 거의 없으니, 재원생 학부모께 이웃 추가를 부탁하거나 글 링크를 카톡으로 함께 보내 주세요.`,
-    `🔤 학부모가 가장 많이 치는 학원 검색어는 '${academy.kw}'(한 달 ${fmt(vol(academy))}회, ${Math.round(((academy.mobile ?? 0) / vol(academy)) * 100)}% 휴대폰)입니다. 광고가 많이 붙는 검색어라, 제목 [ ]에 '의왕 영어학원'을 넣어 블로그 탭·이미지에서라도 보이게 하는 게 좋아요. 브랜드 '${brand.kw}'도 한 달 ${fmt(vol(brand))}회 검색됩니다.`,
-    `🏫 '${school.kw}'은 한 달 ${vol(school)}회 검색되는데 광고가 하나도 없어 블로그 글이 바로 보입니다. 실제로 덕장중 중간고사 분석 글이 최근 주 가장 많이 읽혔어요. 시험 분석·학교 소식 글을 꾸준히 올려 주세요. ('${BLOCKED_KEYWORDS.join(", ")}'는 키워드 도구에서 광고 금지어라 검색량이 안 나오지만, 실제 학부모 검색은 있습니다.)`,
-    `🕑 블로그를 가장 많이 보는 시간은 ${PEAK_TIME}입니다. 그 전인 점심 무렵(오후 1시 전후)에 글을 올리면 가장 많이 볼 때 새 글이 걸려 있어요.`,
+  const novTop = top.filter((d) => d.date >= "2026-11-01");
+  const insights: { icon: string; head: string; body: string }[] = [
+    {
+      icon: "📈",
+      head: `11월 조회수, 10월의 ${(nov / oct).toFixed(1)}배`,
+      body: `22일까지 ${nov}회 (10월 ${oct}회 · 순방문자 ${octM.visitors}명). 글 수는 ${octPosts}편 → ${novPosts}편으로 같고, 11월 글엔 학교 이름이 들어갔어요.`,
+    },
+    {
+      icon: "📝",
+      head: "글 올린 날 전후로 조회가 몰려요",
+      body: `${novTop.map((d) => `${d.label} ${d.views}회`).join(" · ")}. 글이 없던 주는 일주일 2회 → 주 2회 꾸준히.`,
+    },
+    {
+      icon: "🔎",
+      head: "검색 유입은 아직 '학원 이름' 위주",
+      body: `검색 비율 ${searchShare[0]}% → ${searchShare[2]}%. 새 학부모를 데려오는 동네·학교 검색을 늘려야 해요.`,
+    },
+    {
+      icon: "🔤",
+      head: `'${academy.kw}' 한 달 ${fmt(vol(academy))}회 — 가장 큰 검색어`,
+      body: `휴대폰 ${Math.round(((academy.mobile ?? 0) / vol(academy)) * 100)}%, 광고 경쟁 있음. 제목 [의왕 영어학원] 추천. 브랜드 '${brand.kw}'도 월 ${fmt(vol(brand))}회.`,
+    },
+    {
+      icon: "🏫",
+      head: `'${school.kw}'은 광고 없는 기회 검색어`,
+      body: `월 ${vol(school)}회, 광고 0개라 블로그가 바로 보여요. 덕장중 분석 글이 최근 주 1위. (${BLOCKED_KEYWORDS.join(", ")}는 광고 금지어라 검색량만 안 나옴)`,
+    },
+    {
+      icon: "📍",
+      head: "지도 → 블로그 유입 13~19%",
+      body: "'청계동 영어학원' 지도 검색 → 플레이스 → 블로그. 플레이스에 새 글이 보이게 유지하세요.",
+    },
+    {
+      icon: "🎃",
+      head: "시즌 글은 해마다 다시 읽혀요",
+      body: "10월 검색 유입의 절반이 할로윈. 작년 할러윈 글이 올해 10월 2위 → 크리스마스·겨울방학 글을 미리.",
+    },
+    {
+      icon: "🕑",
+      head: `${PEAK_TIME}에 가장 많이 봐요`,
+      body: "점심 무렵(오후 1시 전후)에 올리면 가장 많이 볼 때 새 글이 걸려 있어요.",
+    },
+    {
+      icon: "👥",
+      head: `이웃 조회 ${fmt(total90)}회 중 ${NEIGHBOR_VIEWS_90D}회`,
+      body: "새 글 알림 유입이 거의 없어요. 재원생 학부모께 이웃 추가 부탁, 글 링크 카톡 공유.",
+    },
   ];
 
   return (
@@ -115,7 +148,7 @@ async function Report() {
           <div>
             <p className="font-display text-xl text-hb-navy">블로그 분석 리포트</p>
             <p className="text-xs text-ink-soft">
-              {daily[0].date.replaceAll("-", ".")} ~ {daily[daily.length - 1].date.replaceAll("-", ".")} · {UPDATED} 받은 통계
+              {daily[0].date.replaceAll("-", ".")} ~ {daily[daily.length - 1].date.replaceAll("-", ".")} · {UPDATED} 기준
             </p>
           </div>
           <Link href="/studio" className="text-sm font-bold text-hb-navy underline">
@@ -125,15 +158,6 @@ async function Report() {
       </header>
 
       <main className="mx-auto max-w-6xl space-y-5 px-4 py-6">
-        <div className="flex flex-wrap items-start justify-between gap-3 rounded-2xl bg-sky-50 p-4 text-sm leading-6 text-sky-950 ring-1 ring-sky-200">
-          <p className="min-w-0 flex-1">
-            <b>실제 블로그 통계로 만든 리포트입니다.</b> 네이버 블로그 <b>내 블로그 통계</b>(조회수·유입분석·조회수 순위)와
-            검색광고 <b>키워드 도구</b>에서 {UPDATED}에 내려받은 값이에요. 네이버가 자동 연결을 제공하지 않아, 새 통계를 받으면
-            그때 갱신됩니다.
-          </p>
-          <span className="shrink-0 rounded-full bg-sky-200 px-3 py-1 text-xs font-bold">실제 데이터</span>
-        </div>
-
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           {tiles.map((t) => (
             <div key={t.label} className="rounded-2xl bg-white p-4 ring-1 ring-line">
@@ -172,11 +196,15 @@ async function Report() {
         </Panel>
 
         <section className="rounded-2xl bg-hb-navy p-5 text-white">
-          <h2 className="font-round text-lg">💡 분석 요약</h2>
-          <ul className="mt-3 space-y-2 text-sm leading-6">
+          <h2 className="font-round text-lg">💡 핵심 분석</h2>
+          <ul className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {insights.map((t) => (
-              <li key={t} className="rounded-xl bg-white/10 px-4 py-2.5">
-                {t}
+              <li key={t.head} className="rounded-xl bg-white/10 p-4">
+                <p className="flex items-start gap-2 text-[15px] font-extrabold leading-snug">
+                  <span aria-hidden>{t.icon}</span>
+                  <span>{t.head}</span>
+                </p>
+                <p className="mt-1.5 text-xs leading-5 text-white/75">{t.body}</p>
               </li>
             ))}
           </ul>
@@ -224,7 +252,7 @@ async function Report() {
               </table>
             </div>
             <p className="mt-3 text-xs leading-5 text-ink-soft">
-              방문 수가 적어(한 주 20~60회) 한 사람의 방문도 비율이 크게 움직입니다. 여러 주를 함께 보세요.
+              한 주 방문이 20~60회라 비율이 크게 움직여요. 여러 주를 함께 보세요.
             </p>
           </Panel>
         </div>
@@ -278,8 +306,7 @@ async function Report() {
               </table>
             </div>
             <p className="mt-3 text-xs leading-5 text-ink-soft">
-              받은 연관 검색어 377개 중 교육 관련은 위 정도이고, 나머지는 백운호수 맛집·카페·실버타운 검색이었습니다.
-              &lsquo;백운호수&rsquo;(월 15,340회)는 크지만 대부분 맛집을 찾는 검색이라 학원 글과는 맞지 않아요.
+              &lsquo;백운호수&rsquo;(월 15,340회)는 검색이 많지만 대부분 맛집·카페를 찾는 검색이라 학원 글과는 맞지 않아요.
             </p>
           </Panel>
 
@@ -306,18 +333,6 @@ async function Report() {
           </Panel>
         </div>
 
-        <section className="rounded-2xl border-2 border-dashed border-line bg-white p-5">
-          <h2 className="font-round text-lg text-hb-navy">📥 더 받아 오면 정확해지는 데이터</h2>
-          <ul className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
-            {WANTED.map((w) => (
-              <li key={w.what} className="rounded-xl bg-bg-soft p-4 text-sm leading-6">
-                <p className="font-bold">{w.what}</p>
-                <p className="text-xs text-ink-soft">{w.where}</p>
-                <p className="mt-1">{w.why}</p>
-              </li>
-            ))}
-          </ul>
-        </section>
       </main>
     </div>
   );

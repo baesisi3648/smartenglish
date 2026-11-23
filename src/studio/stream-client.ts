@@ -53,3 +53,43 @@ export async function fetchStream(url: string, init: RequestInit, onText: (live:
   if (end === null) throw new Error("응답이 중간에 끊겼습니다. 다시 시도해 주세요.");
   return end;
 }
+
+/**
+ * 화면용: 블로그 에이전트 진행 상황(NDJSON)을 받는다. {"t":"step",...} 줄마다 onStep, 마지막 {"t":"end"} 의 body 를 돌려준다.
+ * 스트리밍이 아닌 응답(입력 오류 등 미리 거절된 요청)은 그냥 JSON으로 읽는다.
+ */
+export async function fetchSteps<S>(url: string, init: RequestInit, onStep: (step: S) => void): Promise<unknown> {
+  const res = await fetch(url, init);
+  if (!res.body || !(res.headers.get("content-type") ?? "").includes("ndjson")) return res.json();
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  let end: unknown = null;
+  const handle = (line: string) => {
+    if (!line.trim()) return;
+    try {
+      const msg = JSON.parse(line) as { t: string; step?: S; body?: unknown };
+      if (msg.t === "step" && msg.step) onStep(msg.step);
+      else if (msg.t === "end") end = msg.body;
+    } catch {
+      /* 깨진 줄은 건너뜀 */
+    }
+  };
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let nl: number;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        handle(buf.slice(0, nl));
+        buf = buf.slice(nl + 1);
+      }
+    }
+    handle(buf + decoder.decode());
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+  if (end === null) throw new Error("응답이 중간에 끊겼습니다. 다시 시도해 주세요.");
+  return end;
+}

@@ -5,7 +5,8 @@ import Link from "next/link";
 import type { PostType } from "@/studio/post-types";
 import type { Plan, PlanIdea, TypeStat } from "@/studio/planner";
 import type { QuickIdea } from "@/studio/quick-ideas";
-import { fetchStream, type LiveFields } from "@/studio/stream-client";
+import { fetchSteps, fetchStream, type LiveFields } from "@/studio/stream-client";
+import type { AgentStep } from "@/studio/blog-agent";
 import {
   BLOG_STYLE,
   DEFAULT_TEXT_STYLE,
@@ -172,6 +173,9 @@ export default function StudioClient({
   const [copied, setCopied] = useState("");
   const [zipState, setZipState] = useState<"" | "busy" | "done" | "error">("");
   const zipBusy = useRef(false);
+  /** 블로그 에이전트: 진행 단계 기록 (마지막 실행분) */
+  const [agentSteps, setAgentSteps] = useState<AgentStep[]>([]);
+  const [agentRunning, setAgentRunning] = useState(false);
   /** 스트리밍: AI가 지금까지 쓴 제목·본문 (생성·고치기 중에만) */
   const [live, setLive] = useState<LiveFields | null>(null);
   // 요청 순번·취소: 늦게 온 이전 응답이 새 글을 덮어쓰지 않게, 새 요청·화면 이탈 시 이전 요청은 취소
@@ -191,7 +195,7 @@ export default function StudioClient({
     return { id: ++runId.current, signal: ctrl.signal };
   }
   const isCurrent = (id: number) => runId.current === id;
-  const busy = loading || revising;
+  const busy = loading || revising || agentRunning;
 
   const type = postTypes.find((t) => t.id === typeId)!;
   const selectedKeywords = kwPicked ?? [type.defaultKeyword];
@@ -329,6 +333,59 @@ export default function StudioClient({
         setLoading(false);
         setLive(null);
       }
+    }
+  }
+
+  /** 🤖 에이전트에게 맡기기: 지시 한 줄 → 서버에서 조사·계획·작성·검수를 스스로 진행, 단계마다 화면에 표시 */
+  async function runAgentTask(instruction: string) {
+    if (busy || !instruction.trim()) return;
+    if (isByok && !keyOk) {
+      setError({ msg: "OpenAI API 키(sk-로 시작)를 1번 칸에 입력해 주세요." });
+      return;
+    }
+    setAgentRunning(true);
+    setAgentSteps([]);
+    setError(null);
+    const run = startRun();
+    try {
+      const json = (await fetchSteps<AgentStep>(
+        "/api/studio/agent",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Studio-Request": "1", ...byokHeaders },
+          body: JSON.stringify({ agent, instruction }),
+          signal: run.signal,
+        },
+        (step) => isCurrent(run.id) && setAgentSteps((prev) => [...prev, step]),
+      )) as {
+        success: boolean;
+        error: string;
+        data: { title: string; body: string; tags: string[]; notes: string; keywords: string[]; topic: string; agent: string };
+      };
+      if (!isCurrent(run.id)) return;
+      if (!json.success) {
+        setAgentSteps((prev) => [...prev, { kind: "warn", text: json.error }]);
+        return;
+      }
+      const d = json.data;
+      setResult((prev) => {
+        prev?.photos.forEach(URL.revokeObjectURL);
+        return { ...d, photos: [], imagesSeen: false, examplesUsed: 0, auto: true };
+      });
+      setFigures([]);
+      setChanged(null);
+      setEditText(false);
+      setHistory([]);
+      setRevMsg(null);
+      setBody(d.body);
+      draftSeq.current++;
+      requestAnimationFrame(() => document.getElementById("result")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+    } catch (err) {
+      if (isCurrent(run.id) && !run.signal.aborted) {
+        setAgentSteps((prev) => [...prev, { kind: "warn", text: err instanceof Error ? err.message : "요청 실패" }]);
+      }
+    } finally {
+      if (isCurrent(run.id)) setAgentRunning(false);
     }
   }
 
@@ -603,6 +660,15 @@ export default function StudioClient({
                 </div>
               )}
             </Card>
+
+            <AgentPanel
+              steps={agentSteps}
+              running={agentRunning}
+              disabled={busy}
+              agentLabel={selectedAgent.label}
+              blocked={isByok && !keyOk ? "OpenAI API 키를 1번 칸에 먼저 입력해 주세요." : ""}
+              onRun={runAgentTask}
+            />
 
             <div className="rounded-2xl bg-hb-navy p-5 text-white">
               <p className="font-round text-lg">⚡ 바로 한 편 쓰기</p>
@@ -1695,5 +1761,119 @@ function TextStyleControls({ value, onChange }: { value: TextStyle; onChange: (p
         끝인사 &ldquo;감사합니다&rdquo; 손글씨체
       </label>
     </div>
+  );
+}
+
+/** 지시 예시 (눌러서 채우기) */
+const AGENT_EXAMPLES = [
+  "이번 주 블로그 글 하나 알아서 써 줘",
+  "기말고사 앞둔 덕장중 학부모님께 도움 되는 글 써 줘",
+  "검색 유입이 늘어날 만한 초등 영어 글 하나 부탁해",
+];
+
+const STEP_ICON: Record<AgentStep["kind"], string> = { think: "💭", tool: "🔍", write: "✍️", review: "✅", done: "🏁", warn: "⚠️" };
+
+/** 🤖 블로그 에이전트: 지시 입력 + 에이전트가 스스로 진행하는 단계(생각·도구·작성·검수)를 실시간 타임라인으로 */
+function AgentPanel({
+  steps,
+  running,
+  disabled,
+  agentLabel,
+  blocked,
+  onRun,
+}: {
+  steps: AgentStep[];
+  running: boolean;
+  disabled: boolean;
+  agentLabel: string;
+  blocked: string;
+  onRun: (instruction: string) => void;
+}) {
+  const [text, setText] = useState("");
+  const tools = steps.filter((s) => s.kind === "tool").length;
+  return (
+    <section className="overflow-hidden rounded-2xl bg-white ring-2 ring-hb-blue">
+      <div className="bg-gradient-to-r from-hb-navy to-hb-blue px-5 py-4 text-white">
+        <p className="font-round text-lg">🤖 블로그 에이전트에게 맡기기</p>
+        <p className="mt-1 text-xs leading-5 text-white/85">
+          한 줄로 지시하면 에이전트가 <b>블로그 통계·검색어 데이터를 직접 찾아보고</b>, 주제와 키워드를 정해 초안을 쓴 뒤
+          <b> 스스로 검수하고 고쳐서</b> 가져옵니다.
+        </p>
+      </div>
+      <div className="space-y-3 p-5">
+        <textarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          rows={2}
+          maxLength={600}
+          placeholder="예) 기말고사 앞둔 덕장중 학부모님께 도움 되는 글 써 줘"
+          className="w-full rounded-xl border border-line p-3 text-sm"
+        />
+        <div className="flex flex-wrap gap-1.5">
+          {AGENT_EXAMPLES.map((ex) => (
+            <button
+              key={ex}
+              type="button"
+              onClick={() => setText(ex)}
+              className="rounded-full bg-bg-soft px-3 py-1 text-xs text-ink-soft ring-1 ring-line hover:text-ink"
+            >
+              {ex}
+            </button>
+          ))}
+        </div>
+        <button
+          type="button"
+          onClick={() => onRun(text)}
+          disabled={disabled || !!blocked || !text.trim()}
+          className="w-full rounded-full bg-hb-navy py-3 text-sm font-extrabold text-white disabled:opacity-50"
+        >
+          {running ? `${agentLabel} 에이전트가 일하는 중… (조사 ${tools}건)` : "🤖 에이전트에게 맡기기"}
+        </button>
+        {blocked && <p className="text-xs text-red-600">{blocked}</p>}
+
+        {steps.length > 0 && (
+          <ol className="space-y-2 border-l-2 border-line pl-4" aria-live="polite">
+            {steps.map((s, i) => (
+              <li key={i} className="relative text-sm leading-6">
+                <span className="absolute -left-[27px] top-0.5 grid size-5 place-items-center rounded-full bg-white text-xs ring-2 ring-line">
+                  {STEP_ICON[s.kind]}
+                </span>
+                {s.kind === "think" && <p className="text-ink-soft">{s.text}</p>}
+                {s.kind === "tool" && (
+                  <p>
+                    <b>{s.label}</b> <span className="text-xs text-ink-soft">· {s.summary}</span>
+                  </p>
+                )}
+                {s.kind === "write" && <p className="font-bold text-hb-navy">{s.label}</p>}
+                {s.kind === "review" && (
+                  <div>
+                    <p className="font-bold">
+                      자체 검수 {s.score}/{s.total}
+                    </p>
+                    <ul className="mt-1 space-y-0.5 text-xs">
+                      {s.checks.map((c) => (
+                        <li key={c.label} className={c.ok ? "text-emerald-700" : c.must ? "text-red-700" : "text-amber-700"}>
+                          {c.ok ? "✓" : "✗"} {c.label}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {s.kind === "done" && <p className="rounded-xl bg-bg-soft p-3 font-bold text-ink">{s.text}</p>}
+                {s.kind === "warn" && <p className="text-red-700">{s.text}</p>}
+              </li>
+            ))}
+            {running && (
+              <li className="relative animate-pulse text-sm text-ink-soft">
+                <span className="absolute -left-[27px] top-0.5 grid size-5 place-items-center rounded-full bg-white text-xs ring-2 ring-hb-blue">
+                  ⋯
+                </span>
+                다음 단계를 생각하는 중…
+              </li>
+            )}
+          </ol>
+        )}
+      </div>
+    </section>
   );
 }
