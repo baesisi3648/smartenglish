@@ -225,11 +225,22 @@ async function Report() {
                 <thead className="text-xs text-ink-soft">
                   <tr>
                     <th className="pb-2 text-left font-normal">경로</th>
-                    {SOURCE_PERIODS.map((p) => (
-                      <th key={p} className="pb-2 text-right font-normal whitespace-nowrap">
-                        {p}
-                      </th>
-                    ))}
+                    {SOURCE_PERIODS.map((p) => {
+                      const [from, to] = p.split(" ~ ");
+                      return (
+                        <th key={p} className="pb-2 pl-3 text-right align-bottom font-normal leading-4 whitespace-nowrap">
+                          {to ? (
+                            <>
+                              {from} ~
+                              <br />
+                              {to}
+                            </>
+                          ) : (
+                            p
+                          )}
+                        </th>
+                      );
+                    })}
                   </tr>
                 </thead>
                 <tbody>
@@ -240,7 +251,7 @@ async function Report() {
                         {s.hint && <p className="text-xs text-ink-soft">{s.hint}</p>}
                       </td>
                       {s.values.map((v, i) => (
-                        <td key={i} className="py-2 pl-2 text-right">
+                        <td key={i} className="py-2 pl-3 text-right">
                           <span className="font-bold">{v ? v : "–"}</span>
                           <span
                             className="mt-1 ml-auto block h-1.5 rounded-full bg-hb-blue"
