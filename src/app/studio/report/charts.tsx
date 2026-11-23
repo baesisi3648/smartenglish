@@ -1,13 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { DailyPoint, Share } from "@/studio/report-mock";
+import type { DailyPoint, MonthPoint, Share } from "@/studio/report-data";
 
 /** 한 가지 색(브랜드 파랑)만 쓰는 차트들 — 값은 글자색(ink)으로, 색은 막대·선에만 */
 const BLUE = "#0689d7";
 const fmt = (n: number) => n.toLocaleString("ko-KR");
 
-/** 일별 방문자 추이: 선 + 옅은 면, 글 올린 날 점, 마우스를 올리면 그날 값 */
+/** 일별 조회수 추이: 선 + 옅은 면, 글 올린 날 점, 마우스를 올리면 그날 값 */
 export function DailyChart({ data }: { data: DailyPoint[] }) {
   const [hover, setHover] = useState<number | null>(null);
   // 실제 너비에 맞춰 그려 글자 크기가 화면에 따라 커지거나 작아지지 않게
@@ -21,12 +21,12 @@ export function DailyChart({ data }: { data: DailyPoint[] }) {
     return () => ro.disconnect();
   }, []);
   const H = W < 500 ? 180 : 220;
-  const every = W < 500 ? 7 : 5;
+  const every = W < 500 ? 21 : 14;
   const P = { t: 12, r: 8, b: 26, l: 34 };
-  const max = Math.ceil(Math.max(...data.map((d) => d.visitors)) / 20) * 20;
+  const max = Math.ceil(Math.max(...data.map((d) => d.views)) / 10) * 10;
   const x = (i: number) => P.l + (i / (data.length - 1)) * (W - P.l - P.r);
   const y = (v: number) => P.t + (1 - v / max) * (H - P.t - P.b);
-  const line = data.map((d, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(d.visitors).toFixed(1)}`).join("");
+  const line = data.map((d, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(d.views).toFixed(1)}`).join("");
   const area = `${line}L${x(data.length - 1)},${y(0)}L${x(0)},${y(0)}Z`;
   const ticks = [0, max / 2, max];
   const h = hover !== null ? data[hover] : null;
@@ -48,7 +48,7 @@ export function DailyChart({ data }: { data: DailyPoint[] }) {
         onPointerMove={onMove}
         onPointerLeave={() => setHover(null)}
         role="img"
-        aria-label="최근 30일 일별 방문자 수"
+        aria-label={`최근 ${data.length}일 일별 조회수`}
       >
         {ticks.map((t) => (
           <g key={t}>
@@ -75,25 +75,73 @@ export function DailyChart({ data }: { data: DailyPoint[] }) {
         <path d={area} fill={BLUE} opacity={0.1} />
         <path d={line} fill="none" stroke={BLUE} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
         {data.map((d, i) =>
-          d.posted ? <circle key={d.date} cx={x(i)} cy={y(d.visitors)} r={4.5} fill={BLUE} stroke="#fff" strokeWidth={2} /> : null,
+          d.post ? <circle key={d.date} cx={x(i)} cy={y(d.views)} r={4.5} fill={BLUE} stroke="#fff" strokeWidth={2} /> : null,
         )}
         {h && hover !== null && (
           <g>
             <line x1={x(hover)} x2={x(hover)} y1={P.t} y2={y(0)} stroke="#1f2430" strokeWidth={1} strokeDasharray="3 3" />
-            <circle cx={x(hover)} cy={y(h.visitors)} r={5} fill={BLUE} stroke="#fff" strokeWidth={2} />
+            <circle cx={x(hover)} cy={y(h.views)} r={5} fill={BLUE} stroke="#fff" strokeWidth={2} />
           </g>
         )}
       </svg>
       {h && hover !== null && (
         <div
           className="pointer-events-none absolute top-0 z-10 -translate-x-1/2 rounded-lg bg-ink px-3 py-2 text-xs leading-5 text-white shadow-lg"
-          style={{ left: `${(x(hover) / W) * 100}%` }}
+          style={{ left: `${Math.min(82, Math.max(18, (x(hover) / W) * 100))}%` }}
         >
           <p className="font-bold">{h.label}</p>
-          <p>방문자 {fmt(h.visitors)}명 · 조회 {fmt(h.views)}회</p>
-          {h.posted && <p className="text-hb-yellow">● 글 올린 날</p>}
+          <p>조회 {fmt(h.views)}회</p>
+          {h.post && <p className="max-w-56 text-hb-yellow">● {h.post}</p>}
         </div>
       )}
+    </div>
+  );
+}
+
+/** 월별 조회수 세로 막대. 진행 중인 달은 테두리만. 마우스를 올리면 순방문자수도 */
+export function MonthlyBars({ data }: { data: MonthPoint[] }) {
+  const [hover, setHover] = useState<number | null>(null);
+  const max = Math.max(...data.map((d) => d.views));
+  const h = hover !== null ? data[hover] : null;
+  return (
+    <div>
+      <div className="flex h-44 items-end gap-[2px] border-b border-line sm:gap-1">
+        {data.map((d, i) => (
+          <button
+            key={d.label}
+            type="button"
+            onPointerEnter={() => setHover(i)}
+            onPointerLeave={() => setHover(null)}
+            onFocus={() => setHover(i)}
+            onBlur={() => setHover(null)}
+            className="group relative flex h-full min-w-0 flex-1 flex-col justify-end"
+            aria-label={`${d.label} 조회수 ${d.views}회${d.visitors !== undefined ? `, 순방문자 ${d.visitors}명` : ""}${d.partial ? " (22일까지)" : ""}`}
+          >
+            <span className="mb-0.5 text-center text-[10px] font-bold tabular-nums text-ink sm:text-[11px]">{d.views}</span>
+            <span
+              className="block w-full rounded-t-[4px] transition-opacity group-hover:opacity-80"
+              style={{
+                height: `${(d.views / max) * 100}%`,
+                background: d.partial ? "#fff" : BLUE,
+                border: d.partial ? `2px solid ${BLUE}` : undefined,
+                borderBottom: "none",
+              }}
+            />
+          </button>
+        ))}
+      </div>
+      <div className="mt-1 flex gap-[2px] sm:gap-1">
+        {data.map((d, i) => (
+          <span key={d.label} className="min-w-0 flex-1 text-center text-[10px] text-ink-soft sm:text-[11px]">
+            {i === 0 || d.label.endsWith(".01") ? d.label : d.label.slice(3)}
+          </span>
+        ))}
+      </div>
+      <p className="mt-2 min-h-5 text-xs text-ink-soft">
+        {h
+          ? `${h.label} · 조회 ${h.views}회${h.visitors !== undefined ? ` · 순방문자 ${h.visitors}명${h.visitorsApprox ? "(대략)" : ""}` : ""}${h.partial ? " (11월 22일까지)" : ""}`
+          : "막대에 마우스를 올리면 순방문자수도 보여요 · 테두리 막대 = 11월(22일까지)"}
+      </p>
     </div>
   );
 }
