@@ -586,11 +586,26 @@ const ampm = (t: string) => `${hourOf(t) < 12 ? "오전" : hourOf(t) === 12 ? "�
  * 시각 고르기: [시] [분] 두 칸 (10분 단위).
  * 브라우저 기본 시계 칸은 오전/오후를 따로 골라야 해서, 오후 3시를 넣으려다 새벽 3시로 저장되는 일이 있었다.
  */
-function TimePick({ value, onChange, optional = false, small = false, label = "" }: { value: string; onChange: (v: string) => void; optional?: boolean; small?: boolean; label?: string }) {
+function TimePick({
+  value,
+  onChange,
+  optional = false,
+  small = false,
+  label = "",
+  step = 10,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  optional?: boolean;
+  small?: boolean;
+  label?: string;
+  /** 분 단위 (등원 시각 10분, 출석 시각 1분) */
+  step?: number;
+}) {
   const h = value ? hourOf(value) : null;
   const m = value ? value.slice(3) : "";
-  const hours = h !== null && !HOURS.includes(h) ? [h, ...HOURS] : HOURS;
-  const mins = ["00", "10", "20", "30", "40", "50"];
+  const hours = h !== null && !HOURS.includes(h) ? [h, ...HOURS].sort((a, b) => a - b) : HOURS;
+  const mins = Array.from({ length: Math.ceil(60 / step) }, (_, i) => String(i * step).padStart(2, "0"));
   if (m && !mins.includes(m)) {
     mins.push(m); // 예전에 5분 단위로 넣은 시각도 그대로 보이게
     mins.sort();
@@ -743,6 +758,109 @@ function askNotify() {
   }
 }
 
+/**
+ * 출석 칸: [출석!] = 지금 시각. 이미 와 있던 학생은 "시각 직접 넣기"로 지난 시각(1분 단위)을 넣는다.
+ * 출석한 뒤에도 "시각 고치기"로 바꿀 수 있다 (오늘만).
+ */
+function AttendBox({ sid, dur, att, isToday, busy, save }: { sid: number; dur: number | null; att?: Attend; isToday: boolean; busy: boolean; save: Save }) {
+  const nowHM = () => fromMin(kstNow().min);
+  const [manual, setManual] = useState(false);
+  const [at, setAt] = useState(att?.at ?? nowHM());
+  const attEnd = att && dur ? toMin(att.at) + dur : null;
+  const future = toMin(at) > kstNow().min;
+  const prepare = () => {
+    askNotify();
+    unlockSound();
+  };
+  const picker = manual && isToday && (
+    <div className="space-y-2 rounded-xl bg-white p-3 ring-1 ring-emerald-200">
+      <p className="text-xs font-bold text-emerald-900">실제로 온 시각</p>
+      <div className="flex gap-2">
+        <TimePick value={at} onChange={setAt} step={1} label="출석" />
+      </div>
+      {future && <p className="text-xs text-red-700">아직 지나지 않은 시각이에요.</p>}
+      <div className="grid grid-cols-2 gap-2">
+        <button
+          type="button"
+          disabled={busy || !at || future}
+          onClick={() => {
+            prepare();
+            void save({ action: "checkIn", studentId: sid, at });
+          }}
+          className="w-full rounded-full bg-emerald-600 py-2 text-sm font-bold text-white disabled:opacity-50"
+        >
+          {ampm(at)} 출석으로 저장
+        </button>
+        <button type="button" onClick={() => setManual(false)} className="w-full rounded-full border border-line py-2 text-sm">
+          닫기
+        </button>
+      </div>
+    </div>
+  );
+
+  if (att)
+    return (
+      <div className="space-y-2">
+        <div className="flex items-center justify-between gap-2 rounded-xl bg-emerald-50 p-3 text-sm text-emerald-900 ring-1 ring-emerald-200">
+          <span>
+            ✓ <b>{short(att.at)}</b> 출석
+            {attEnd !== null ? (
+              <>
+                {" "}
+                · <b>{short(fromMin(attEnd))}</b> 끝 <span className="text-xs">({short(fromMin(attEnd - 10))}에 알림)</span>
+              </>
+            ) : (
+              <span className="block text-xs">수업시간을 정해 두면 끝나기 10분 전에 알려 드려요 (아래 메모·수업시간)</span>
+            )}
+          </span>
+          {isToday && (
+            <span className="flex shrink-0 flex-col items-end gap-1 text-xs">
+              {!manual && (
+                <button type="button" disabled={busy} onClick={() => setManual(true)} className="underline">
+                  시각 고치기
+                </button>
+              )}
+              <button type="button" disabled={busy} onClick={() => save({ action: "undoCheckIn", studentId: sid })} className="underline">
+                출석 취소
+              </button>
+            </span>
+          )}
+        </div>
+        {picker}
+      </div>
+    );
+
+  return (
+    <div className="space-y-2">
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => {
+          prepare();
+          void save({ action: "checkIn", studentId: sid });
+        }}
+        className="w-full rounded-full bg-emerald-600 py-3 text-lg font-extrabold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50"
+      >
+        출석!
+      </button>
+      {manual ? (
+        picker
+      ) : (
+        <button
+          type="button"
+          onClick={() => {
+            setAt(nowHM());
+            setManual(true);
+          }}
+          className="w-full text-center text-xs text-ink-soft underline"
+        >
+          출석 시각 직접 입력
+        </button>
+      )}
+    </div>
+  );
+}
+
 function EntryEditor({
   entry,
   toDay,
@@ -775,7 +893,6 @@ function EntryEditor({
   // 옮길 요일에 이 학생이 이미 오면 막는다 (덮어쓰지 않게)
   const clash = moving ? entries.find((e) => e.student.id === sid && e.weekday === day && e.status !== "off") : undefined;
   const canRestore = entry.status !== "regular" && (!!entry.regularTime || !!entry.fromWeekday);
-  const attEnd = att && dur ? toMin(att.at) + dur : null;
 
   const thisWeek = () =>
     entry.status === "off" && !moving && time === entry.regularTime && (arrive || null) === entry.arrive
@@ -796,40 +913,9 @@ function EntryEditor({
         </p>
       </div>
 
-      {((isToday && entry.status !== "off") || att) &&
-        (att ? (
-          <div className="flex items-center justify-between gap-2 rounded-xl bg-emerald-50 p-3 text-sm text-emerald-900 ring-1 ring-emerald-200">
-            <span>
-              ✓ <b>{short(att.at)}</b> 출석
-              {attEnd !== null ? (
-                <>
-                  {" "}
-                  · <b>{short(fromMin(attEnd))}</b> 끝 <span className="text-xs">({short(fromMin(attEnd - 10))}에 알림)</span>
-                </>
-              ) : (
-                <span className="block text-xs">수업시간을 정해 두면 끝나기 10분 전에 알려 드려요 (아래 메모·수업시간)</span>
-              )}
-            </span>
-            {isToday && (
-              <button type="button" disabled={busy} onClick={() => save({ action: "undoCheckIn", studentId: sid })} className="shrink-0 text-xs underline">
-                출석 취소
-              </button>
-            )}
-          </div>
-        ) : (
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => {
-              askNotify();
-              unlockSound();
-              void save({ action: "checkIn", studentId: sid });
-            }}
-            className="w-full rounded-full bg-emerald-600 py-3 text-lg font-extrabold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50"
-          >
-            출석!
-          </button>
-        ))}
+      {((isToday && entry.status !== "off") || att) && (
+        <AttendBox key={att?.at ?? "none"} sid={sid} dur={dur} att={att} isToday={isToday} busy={busy} save={save} />
+      )}
 
       <DayTime day={day} time={time} setDay={setDay} setTime={setTime} />
       <ArriveInput value={arrive} setValue={setArrive} />

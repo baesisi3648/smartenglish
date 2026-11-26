@@ -53,7 +53,7 @@ function slotsOf(v: unknown): Slots | null {
  *   getWeek { week }
  *   saveStudent { id?, name, note, duration, slots } · removeStudent { id } · bulkAdd { students: [{ name, slots }] }
  *   saveInfo { studentId, note, duration }   메모·수업시간(분)만 바꾸기
- *   checkIn / undoCheckIn { studentId }      오늘 출석! / 출석 취소
+ *   checkIn { studentId, at? } / undoCheckIn { studentId }   오늘 출석! (at "HH:MM"이면 그 시각으로 넣기·고치기) / 출석 취소
  *   moveOnce / moveWeekly { studentId, week, from, to, time }      이번 주만 / 매주 옮기기·시간 바꾸기
  *   addVisit { studentId, week, weekday, time, weekly }             빈 요일에 넣기
  *   skipOnce / restore / removeRegularDay { studentId, week, weekday }
@@ -99,7 +99,12 @@ export async function POST(req: NextRequest) {
       case "undoCheckIn": {
         const bad = needStudent();
         if (bad) return bad;
-        await (b.action === "checkIn" ? checkIn : undoCheckIn)(sid);
+        if (b.action === "undoCheckIn") await undoCheckIn(sid);
+        else {
+          const at = b.at == null || b.at === "" ? undefined : String(b.at);
+          if (at !== undefined && !/^([01]\d|2[0-3]):[0-5]\d$/.test(at)) return fail(400, "INVALID_TIME", "출석 시각이 올바르지 않습니다.");
+          await checkIn(sid, at);
+        }
         break;
       }
       case "removeStudent": {

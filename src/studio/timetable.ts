@@ -243,13 +243,24 @@ export async function saveInfo(id: number, note: string, duration: number | null
   if (!r.length) throw new TimetableError("NOT_FOUND", "학생을 찾을 수 없습니다.", 404);
 }
 
-/** 출석! — 오늘(한국 날짜) 처음 누른 시각을 남긴다. 이미 눌렀으면 그대로 */
-export async function checkIn(id: number) {
+/**
+ * 출석! — 오늘(한국 날짜) 출석 시각을 남긴다.
+ * - at 없음: 지금 시각 (이미 눌렀으면 그대로)
+ * - at "HH:MM": 그 시각으로 넣거나 고친다 (이미 온 학생을 늦게 기록할 때, 1분 단위)
+ */
+export async function checkIn(id: number, at?: string) {
   await ensureSchema();
   const sql = db();
   const ok = await sql`SELECT 1 FROM tt_students WHERE id = ${id} AND active`;
   if (!ok.length) throw new TimetableError("NOT_FOUND", "학생을 찾을 수 없습니다.", 404);
-  await sql`INSERT INTO tt_attend (student_id, day) VALUES (${id}, (now() AT TIME ZONE 'Asia/Seoul')::date) ON CONFLICT DO NOTHING`;
+  if (!at) {
+    await sql`INSERT INTO tt_attend (student_id, day) VALUES (${id}, (now() AT TIME ZONE 'Asia/Seoul')::date) ON CONFLICT DO NOTHING`;
+    return;
+  }
+  if (!isClock(at)) throw new TimetableError("INVALID_TIME", "출석 시각이 올바르지 않습니다.", 400);
+  await sql`INSERT INTO tt_attend (student_id, day, at)
+            VALUES (${id}, (now() AT TIME ZONE 'Asia/Seoul')::date, ((now() AT TIME ZONE 'Asia/Seoul')::date + ${at}::time) AT TIME ZONE 'Asia/Seoul')
+            ON CONFLICT (student_id, day) DO UPDATE SET at = EXCLUDED.at`;
 }
 
 /** 오늘 출석 취소 (잘못 누른 경우) */
