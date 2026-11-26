@@ -10,7 +10,8 @@ export const MAX_BULK_ROWS = 60;
 const DAY_INDEX: Record<string, Weekday> = { 월: 1, 화: 2, 수: 3, 목: 4, 금: 5 };
 const toTime = (h: number, m: number) => {
   if (h >= 1 && h <= 9) h += 12;
-  return h > 23 || m > 59 ? null : `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+  // 학원 시각(오전 8시 ~ 오후 10시)만 — 서버와 같은 범위 (벗어나면 미리보기에서 빠져 보임)
+  return h < 8 || h > 22 || m > 59 ? null : `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 };
 
 export type BulkRow = { name: string; slots: { weekday: Weekday; time: string; arrive: string | null }[] };

@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { kstWeekday, weekStartOf } from "@/studio/week";
-import type { Student, WeekData, Weekday } from "@/studio/timetable";
+import type { Attend, Student, WeekData, Weekday } from "@/studio/timetable";
 import StudioHeader from "../studio-header";
 import { MAX_BULK_ROWS, parseBulk } from "./parse-bulk";
 
@@ -11,6 +11,8 @@ import { MAX_BULK_ROWS, parseBulk } from "./parse-bulk";
  * - 빈 칸 클릭 = 학생 넣기 · 이름 클릭 = 바꾸기 · 이름을 다른 칸으로 끌어다 놓기 = 옮기기
  * - 바꿀 때마다 "이번 주만"(다음 주엔 평소대로) / "매주"(평소 시간 변경) 중 고른다
  * - 왼쪽 시간 칸은 ⚙️ 시간 칸에서 직접 정한다
+ * - 이름에 마우스를 올리면 메모·수업시간 말풍선
+ * - 오늘 온 아이는 이름 클릭 → 출석! → (출석 시각 + 수업시간 − 10분)에 소리·알림 (이 화면을 켜 둔 동안)
  */
 
 const DAYS: Weekday[] = [1, 2, 3, 4, 5];
@@ -29,19 +31,30 @@ const addDays = (iso: string, n: number) => new Date(new Date(`${iso}T00:00:00Z`
 const md = (iso: string) => `${Number(iso.slice(5, 7))}.${Number(iso.slice(8, 10))}`;
 /** 그 주 월요일 기준 "26년 11월 4주차" */
 const weekLabel = (mon: string) => `${mon.slice(2, 4)}년 ${Number(mon.slice(5, 7))}월 ${Math.floor((Number(mon.slice(8, 10)) - 1) / 7) + 1}주차`;
-/** 칸 안 이름 옆 괄호: 언제나 오는 시각 — 실제 도착 시각이 있으면 그것, 없으면 수업 시각 (10분 단위로 다르니 정각도 표시) */
+const toMin = (t: string) => hourOf(t) * 60 + Number(t.slice(3));
+const fromMin = (m: number) => `${String(Math.floor(m / 60) % 24).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+/** 90 → "1시간 30분" */
+const durText = (m: number) => [Math.floor(m / 60) ? `${Math.floor(m / 60)}시간` : "", m % 60 ? `${m % 60}분` : ""].filter(Boolean).join(" ");
+const DURATIONS = [30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 150, 180];
+/** 한국 시각 지금: 오늘 날짜 + 하루 중 몇 분째 */
+const kstNow = () => {
+  const k = new Date(Date.now() + 9 * 3600_000);
+  return { day: k.toISOString().slice(0, 10), min: k.getUTCHours() * 60 + k.getUTCMinutes() };
+};
 /** 실제로 오는 시각: 도착 시각이 따로 있으면 그것, 없으면 수업 시각 — 시간표 칸도 이 시각으로 정한다 */
 const placeOf = (e: { time: string; arrive: string | null }) => e.arrive ?? e.time;
 /**
- * 이름 옆 괄호: 오는 시각. 바뀐 경우엔 "원래 → 바뀐" (예: 3:00 → 1:40)
+ * 이름 옆 괄호: 오는 시각(~끝나는 시각). 바뀐 경우엔 "원래 → 바뀐" (예: 3:00 → 1:40~2:40)
  * - 도착 시각이 수업 시각과 다름 / 이번 주만 시간이 바뀜(평소 시각과 다름)
+ * - 수업시간이 정해진 학생은 오는 시각 + 수업시간 = 끝나는 시각
  */
-const badge = (e: { time: string; arrive: string | null; status: Status; regularTime?: string }) => {
+const badge = (e: Entry) => {
   const now = placeOf(e);
   const before = e.arrive && e.arrive !== e.time ? e.time : e.status === "moved" && e.regularTime && e.regularTime !== now ? e.regularTime : null;
-  return before ? `${short(before)} → ${short(now)}` : short(now);
+  const end = e.student.duration ? `~${short(fromMin(toMin(now) + e.student.duration))}` : "";
+  return before ? `${short(before)} → ${short(now)}${end}` : `${short(now)}${end}`;
 };
-const plusHour = (t: string) => `${String(Math.min(23, hourOf(t) + 1)).padStart(2, "0")}:${t.slice(3)}`;
+const plusHour = (t: string) => `${String(Math.min(22, hourOf(t) + 1)).padStart(2, "0")}:${t.slice(3)}`;
 /** 학생 시각이 들어갈 칸: 시각보다 같거나 이른 칸 중 마지막 (첫 칸보다 이르면 첫 칸) */
 const rowIndex = (time: string, rows: string[]) => {
   let i = 0;
@@ -63,6 +76,54 @@ function buildEntries(d: WeekData): Entry[] {
     }
   }
   return out.sort((a, b) => placeOf(a).localeCompare(placeOf(b)) || a.student.name.localeCompare(b.student.name, "ko"));
+}
+
+/** 이미 울린 알림인지 (새로고침해도 두 번 울리지 않게 브라우저에 기억). 처음이면 기억하고 false */
+function seenAlert(key: string) {
+  try {
+    if (localStorage.getItem(key)) return true;
+    localStorage.setItem(key, "1");
+  } catch {
+    /* 저장이 막힌 브라우저: 이 화면 안에서만 기억 */
+  }
+  return false;
+}
+
+/**
+ * 소리: 브라우저는 클릭 같은 사용자 동작 안에서 켠 소리만 허락하므로,
+ * '출석!'을 누를 때 소리를 미리 켜 두고(unlockSound) 알림 때 그것으로 울린다.
+ */
+let audio: AudioContext | null = null;
+function unlockSound() {
+  try {
+    const Ctx = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    audio ??= new Ctx();
+    if (audio.state === "suspended") void audio.resume();
+  } catch {
+    /* 소리를 못 써도 화면 알림은 뜸 */
+  }
+}
+
+/** 띵-띵-띵 (따로 소리 파일 없이) */
+function ring() {
+  try {
+    unlockSound();
+    const ctx = audio;
+    if (!ctx) return;
+    [0, 0.4, 0.8].forEach((t) => {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.frequency.value = 880;
+      o.connect(g);
+      g.connect(ctx.destination);
+      g.gain.setValueAtTime(0.3, ctx.currentTime + t);
+      g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + t + 0.35);
+      o.start(ctx.currentTime + t);
+      o.stop(ctx.currentTime + t + 0.35);
+    });
+  } catch {
+    /* 소리를 못 내도 화면 알림은 뜸 */
+  }
 }
 
 /** 읽기·변경 모두 POST (출처·로그인 검사를 같은 규칙으로). 끝나면 그 주 시간표 전체가 돌아온다 */
@@ -127,7 +188,52 @@ export default function TimetableClient({
     return () => window.clearTimeout(id);
   }, [toast]);
 
+  /** 지금 한국 시각 (15초마다) — 출석한 아이의 '곧 끝남' 표시·알림용 */
+  const [clock, setClock] = useState<{ day: string; min: number } | null>(null);
+  useEffect(() => {
+    const t = () => setClock(kstNow());
+    const first = window.setTimeout(t, 0);
+    const id = window.setInterval(t, 15_000);
+    return () => {
+      window.clearTimeout(first);
+      window.clearInterval(id);
+    };
+  }, []);
+  /** 끝나기 10분 전 알림 (확인을 누를 때까지 화면에 남음) */
+  const [alerts, setAlerts] = useState<{ key: string; name: string; end: string }[]>([]);
+  const alerted = useRef(new Set<string>());
+  useEffect(() => {
+    if (!clock) return;
+    const due: { key: string; name: string; end: string }[] = [];
+    for (const a of data.attend) {
+      const s = data.students.find((x) => x.id === a.studentId);
+      if (a.day !== clock.day || !s?.duration) continue;
+      const end = toMin(a.at) + s.duration;
+      if (clock.min < end - 10 || clock.min > end + 20) continue; // 끝난 지 20분 넘었으면 울리지 않음
+      const key = `tt-alert-${a.studentId}-${a.day}-${a.at}-${s.duration}`;
+      if (alerted.current.has(key) || seenAlert(key)) continue;
+      alerted.current.add(key);
+      due.push({ key, name: s.name, end: fromMin(end) });
+    }
+    if (!due.length) return;
+    ring();
+    try {
+      if ("Notification" in window && Notification.permission === "granted") {
+        // 아이 이름은 운영체제 알림(잠금 화면 등)에 띄우지 않는다 — 이름은 스튜디오 화면 안에서만
+        new Notification("⏰ 수업 끝나기 10분 전", { body: `${due.length}명 곧 끝나요. 스튜디오 화면을 확인해 주세요.` });
+      }
+    } catch {
+      /* 알림을 못 띄워도 화면 알림은 뜸 */
+    }
+    // (취소하지 않음: 한 번 울린 알림은 꼭 화면에 남긴다)
+    window.setTimeout(() => setAlerts((x) => [...x, ...due]), 0);
+  }, [clock, data]);
+  /** 이름 위 말풍선 (표 밖에 띄워 잘리지 않게) */
+  const [tip, setTip] = useState<{ x: number; y: number; title: string; lines: string[] } | null>(null);
+
   const entries = useMemo(() => buildEntries(data), [data]);
+  const dayIso = (d: Weekday) => addDays(data.week, d - 1);
+  const attendOf = (sid: number, day: string) => data.attend.find((a) => a.studentId === sid && a.day === day);
   const changes = entries.filter((e) => e.status !== "regular").length;
   const isThisWeek = data.week === thisWeek;
 
@@ -232,7 +338,7 @@ export default function TimetableClient({
             {busy && <span className="no-print ml-2 text-xs font-normal text-ink-soft">저장 중…</span>}
           </h1>
           <p className="no-print text-xs text-ink-soft">
-            빈 칸 클릭 = 넣기 · 이름 클릭 = 바꾸기 · 이름 끌어다 놓기 = 이번 주만 옮기기 · <span className="rounded bg-amber-100 px-1">노란색</span> = 이번 주만 변경 ({changes}건)
+            빈 칸 클릭 = 넣기 · 이름 클릭 = 바꾸기 · 이름 끌어다 놓기 = 이번 주만 옮기기 · <span className="rounded bg-amber-100 px-1">노란색</span> = 이번 주만 변경 ({changes}건) · <span className="rounded bg-emerald-100 px-1">초록</span> = 출석 · <span className="rounded bg-orange-100 px-1">주황</span> = 곧 끝
           </p>
         </div>
 
@@ -293,30 +399,76 @@ export default function TimetableClient({
                         }`}
                       >
                         <div className="pointer-events-none flex flex-wrap gap-1">
-                          {cell.map((e) => (
-                            <button
-                              key={`${e.student.id}-${e.weekday}`}
-                              type="button"
-                              draggable={e.status !== "off"}
-                              onDragStart={(ev) => {
-                                ev.dataTransfer.setData("text/plain", `${e.student.id}-${e.weekday}`);
-                                ev.dataTransfer.effectAllowed = "move";
-                              }}
-                              onClick={() => setEditor({ kind: "entry", entry: e })}
-                              title={[e.student.note, e.status !== "off" ? "끌어다 놓아 옮길 수 있어요" : ""].filter(Boolean).join(" · ") || undefined}
-                              className={`pointer-events-auto cursor-grab rounded-md px-1.5 py-0.5 text-[13px] leading-5 active:cursor-grabbing print:px-0.5 ${
-                                e.status === "regular"
-                                  ? "bg-bg-soft text-ink hover:ring-1 hover:ring-hb-blue"
-                                  : e.status === "off"
-                                    ? "cursor-pointer text-ink-soft line-through opacity-60"
-                                    : "bg-amber-100 font-bold text-amber-900 ring-1 ring-amber-300"
-                              }`}
-                            >
-                              {e.student.name}
-                              {e.status !== "off" && <span className="ml-0.5 text-[11px]">({badge(e)})</span>}
-                              {e.status === "off" && <span className="ml-0.5 text-[11px]">쉼</span>}
-                            </button>
-                          ))}
+                          {cell.map((e) => {
+                            const dur = e.student.duration;
+                            const att = e.status !== "off" ? attendOf(e.student.id, dayIso(e.weekday)) : undefined;
+                            const endMin = att && dur ? toMin(att.at) + dur : null;
+                            // 출석한 아이: 수업 중(초록) → 끝나기 10분 전(주황) → 끝(흐리게)
+                            const phase = !att
+                              ? null
+                              : !clock || clock.day < att.day
+                                ? "in"
+                                : clock.day > att.day || (endMin !== null && clock.min >= endMin)
+                                  ? "done"
+                                  : endMin !== null && clock.min >= endMin - 10
+                                    ? "soon"
+                                    : "in";
+                            const tipLines = [
+                              e.student.note,
+                              dur ? `수업 ${durText(dur)}` : "",
+                              att ? `${short(att.at)} 출석${endMin !== null ? ` · ${short(fromMin(endMin))} 끝` : ""}` : "",
+                            ].filter(Boolean);
+                            return (
+                              <button
+                                key={`${e.student.id}-${e.weekday}`}
+                                type="button"
+                                draggable={e.status !== "off"}
+                                onDragStart={(ev) => {
+                                  setTip(null);
+                                  ev.dataTransfer.setData("text/plain", `${e.student.id}-${e.weekday}`);
+                                  ev.dataTransfer.effectAllowed = "move";
+                                }}
+                                onMouseEnter={(ev) => {
+                                  if (!tipLines.length) return;
+                                  const r = ev.currentTarget.getBoundingClientRect();
+                                  setTip({ x: Math.min(r.left, window.innerWidth - 270), y: r.bottom + 6, title: e.student.name, lines: tipLines });
+                                }}
+                                onMouseLeave={() => setTip(null)}
+                                onClick={() => {
+                                  setTip(null);
+                                  setEditor({ kind: "entry", entry: e });
+                                }}
+                                className={`pointer-events-auto cursor-grab rounded-md px-1.5 py-0.5 text-[13px] leading-5 active:cursor-grabbing print:px-0.5 ${
+                                  phase === "in"
+                                    ? "bg-emerald-100 font-bold text-emerald-900 ring-1 ring-emerald-400"
+                                    : phase === "soon"
+                                      ? "animate-pulse bg-orange-100 font-bold text-orange-900 ring-2 ring-orange-400"
+                                      : phase === "done"
+                                        ? "bg-white text-ink-soft ring-1 ring-line"
+                                        : e.status === "regular"
+                                          ? "bg-bg-soft text-ink hover:ring-1 hover:ring-hb-blue"
+                                          : e.status === "off"
+                                            ? "cursor-pointer text-ink-soft line-through opacity-60"
+                                            : "bg-amber-100 font-bold text-amber-900 ring-1 ring-amber-300"
+                                }`}
+                              >
+                                {att && "✓"}
+                                {e.student.name}
+                                {e.student.note && <span aria-label="메모 있음" className="ml-0.5 inline-block h-1.5 w-1.5 rounded-full bg-hb-blue align-super print:hidden" />}
+                                {att ? (
+                                  <span className="ml-0.5 text-[11px]">
+                                    ({short(att.at)}
+                                    {endMin !== null && `~${short(fromMin(endMin))}`}
+                                    {phase === "done" && " 끝"})
+                                  </span>
+                                ) : e.status !== "off" ? (
+                                  <span className="ml-0.5 text-[11px]">({badge(e)})</span>
+                                ) : (
+                                  <span className="ml-0.5 text-[11px]">쉼</span>
+                                )}
+                              </button>
+                            );
+                          })}
                         </div>
                         {count > 0 && (
                           <span className={`pointer-events-none absolute top-1 right-1.5 text-[11px] font-bold ${over ? "text-red-700" : "text-ink-soft"}`}>{count}명</span>
@@ -331,13 +483,39 @@ export default function TimetableClient({
           </table>
         </div>
         <p className="no-print text-xs text-ink-soft">
-          칸 오른쪽 위 숫자 = 그 시간 등원 인원 (정원 {capacity}명을 넘으면 빨간색) · 학생 시각은 같거나 바로 앞 시간 칸에 들어가요 (예: 2:40 → 2시 칸).
+          칸 오른쪽 위 숫자 = 그 시간 등원 인원 (정원 {capacity}명을 넘으면 빨간색) · 학생 시각은 같거나 바로 앞 시간 칸에 들어가요 (예: 2:40 → 2시 칸) · 파란 점 = 메모 있음 (마우스를 올리면 보여요) · 끝나기 10분 전 알림은 이 화면을 켜 둔 동안 울려요.
         </p>
 
         {showStudents && (
           <StudentList data={data} onEdit={(s) => setEditor({ kind: "student", student: s })} onAdd={() => setEditor({ kind: "student" })} onBulk={() => setEditor({ kind: "bulk" })} />
         )}
       </main>
+
+      {tip && (
+        <div className="no-print pointer-events-none fixed z-40 w-max max-w-[260px] rounded-lg bg-ink px-3 py-2 text-xs leading-5 text-white shadow-xl" style={{ left: tip.x, top: tip.y }}>
+          <p className="font-bold">{tip.title}</p>
+          {tip.lines.map((l, i) => (
+            <p key={i} className="whitespace-pre-wrap">
+              {l}
+            </p>
+          ))}
+        </div>
+      )}
+
+      {alerts.length > 0 && (
+        <div role="alert" className="no-print fixed top-4 left-1/2 z-[60] w-[min(92vw,420px)] -translate-x-1/2 space-y-2">
+          {alerts.map((a) => (
+            <div key={a.key} className="flex items-center justify-between gap-3 rounded-2xl bg-orange-500 px-5 py-3.5 text-white shadow-2xl ring-4 ring-orange-200">
+              <span className="text-base">
+                ⏰ <b>{a.name}</b> — {short(a.end)}에 수업 끝 (10분 전)
+              </span>
+              <button type="button" onClick={() => setAlerts((x) => x.filter((y) => y.key !== a.key))} className="shrink-0 rounded-full bg-white px-3 py-1 text-sm font-bold text-orange-700">
+                확인
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
       {toast && (
         <div role="status" className="no-print fixed bottom-5 left-1/2 z-40 flex max-w-[92vw] -translate-x-1/2 items-center gap-3 rounded-full bg-ink px-5 py-3 text-sm text-white shadow-xl">
@@ -367,7 +545,15 @@ export default function TimetableClient({
         <div className="no-print fixed inset-0 z-50 grid place-items-center bg-black/40 p-4" onClick={() => !busy && setEditor(null)}>
           <div role="dialog" aria-modal="true" className="max-h-[90dvh] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
             {editor.kind === "entry" && (
-              <EntryEditor {...editor} entries={entries} busy={busy} save={save} onStudent={(s) => setEditor({ kind: "student", student: s })} />
+              <EntryEditor
+                {...editor}
+                entries={entries}
+                busy={busy}
+                save={save}
+                onStudent={(s) => setEditor({ kind: "student", student: s })}
+                isToday={!!clock && dayIso(editor.entry.weekday) === clock.day}
+                att={attendOf(editor.entry.student.id, dayIso(editor.entry.weekday))}
+              />
             )}
             {editor.kind === "add" && <AddEditor {...editor} data={data} entries={entries} busy={busy} save={save} />}
             {editor.kind === "student" && <StudentEditor student={editor.student} data={data} busy={busy} save={save} />}
@@ -390,38 +576,171 @@ const PRIMARY = "w-full rounded-full bg-hb-navy py-2.5 text-sm font-bold text-wh
 const SECONDARY = "w-full rounded-full border-2 border-hb-navy py-2 text-sm font-bold text-hb-navy disabled:opacity-50";
 const INPUT = "rounded-lg border border-line px-3 py-2 text-sm";
 
+/** 선택할 수 있는 시: 오전 8시 ~ 오후 10시 (오전/오후를 글자로 보여 줘서 헷갈리지 않게) */
+const HOURS = Array.from({ length: 15 }, (_, i) => i + 8);
+const hourText = (h: number) => (h < 12 ? `오전 ${h}시` : h === 12 ? "낮 12시" : `오후 ${h - 12}시`);
+/** "15:20" → "오후 3:20" */
+const ampm = (t: string) => `${hourOf(t) < 12 ? "오전" : hourOf(t) === 12 ? "낮" : "오후"} ${short(t)}`;
+
+/**
+ * 시각 고르기: [시] [분] 두 칸 (10분 단위).
+ * 브라우저 기본 시계 칸은 오전/오후를 따로 골라야 해서, 오후 3시를 넣으려다 새벽 3시로 저장되는 일이 있었다.
+ */
+function TimePick({ value, onChange, optional = false, small = false, label = "" }: { value: string; onChange: (v: string) => void; optional?: boolean; small?: boolean; label?: string }) {
+  const h = value ? hourOf(value) : null;
+  const m = value ? value.slice(3) : "";
+  const hours = h !== null && !HOURS.includes(h) ? [h, ...HOURS] : HOURS;
+  const mins = ["00", "10", "20", "30", "40", "50"];
+  if (m && !mins.includes(m)) {
+    mins.push(m); // 예전에 5분 단위로 넣은 시각도 그대로 보이게
+    mins.sort();
+  }
+  const cls = `${INPUT} min-w-0 ${small ? "px-2 py-1 text-xs" : "px-2 py-1.5"}`;
+  return (
+    <span className="flex min-w-0 flex-1 gap-1">
+      <select
+        aria-label={`${label} 시`}
+        value={h === null ? "" : String(h)}
+        onChange={(e) => onChange(e.target.value === "" ? "" : `${e.target.value.padStart(2, "0")}:${m || "00"}`)}
+        className={`${cls} flex-[3]`}
+      >
+        {(optional || h === null) && <option value="">{optional ? "—" : "시 선택"}</option>}
+        {hours.map((x) => (
+          <option key={x} value={x}>
+            {hourText(x)}
+          </option>
+        ))}
+      </select>
+      <select
+        aria-label={`${label} 분`}
+        value={m}
+        disabled={h === null}
+        onChange={(e) => h !== null && onChange(`${String(h).padStart(2, "0")}:${e.target.value}`)}
+        className={`${cls} flex-[2] disabled:opacity-40`}
+      >
+        {h === null && <option value="">분</option>}
+        {mins.map((x) => (
+          <option key={x} value={x}>
+            {x}분
+          </option>
+        ))}
+      </select>
+    </span>
+  );
+}
+
+function DurationPick({ value, onChange }: { value: number | null; onChange: (v: number | null) => void }) {
+  const opts = value && !DURATIONS.includes(value) ? [...DURATIONS, value].sort((a, b) => a - b) : DURATIONS;
+  return (
+    <label className="flex items-center gap-2 text-sm">
+      <span className="w-16 shrink-0 text-xs font-bold text-ink-soft">수업시간</span>
+      <select value={value ?? ""} onChange={(e) => onChange(e.target.value ? Number(e.target.value) : null)} className={`${INPUT} min-w-0 flex-1 py-1.5`}>
+        <option value="">정하지 않음</option>
+        {opts.map((m) => (
+          <option key={m} value={m}>
+            {durText(m)}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function NoteInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <label className="block text-sm">
+      <span className="mb-1 block text-xs font-bold text-ink-soft">메모 (이름에 마우스를 올리면 보여요)</span>
+      <textarea
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        maxLength={MEMO_MAX}
+        rows={2}
+        placeholder="예) 초3 · 파닉스 / 화요일은 엄마가 픽업"
+        className={`${INPUT} w-full resize-none`}
+      />
+    </label>
+  );
+}
+const MEMO_MAX = 200;
+
+/** 실제 도착 시각 (수업 시각과 다를 때만) — 평소엔 접어 둔다 */
 function ArriveInput({ value, setValue }: { value: string; setValue: (v: string) => void }) {
+  const [open, setOpen] = useState(!!value);
+  if (!open)
+    return (
+      <button type="button" onClick={() => setOpen(true)} className="text-xs text-ink-soft underline">
+        + 수업 시각과 다르게 도착해요
+      </button>
+    );
   return (
     <label className="flex items-center gap-2 text-xs text-ink-soft">
-      <span className="shrink-0">실제 도착 (선택)</span>
-      <input type="time" step={600} value={value} onChange={(e) => setValue(e.target.value)} className={`${INPUT} min-w-0 flex-1 py-1`} />
-      {value && (
-        <button type="button" onClick={() => setValue("")} className="underline">
-          지우기
-        </button>
-      )}
+      <span className="w-16 shrink-0 font-bold">실제 도착</span>
+      <TimePick value={value} onChange={setValue} optional small label="실제 도착" />
+      <button
+        type="button"
+        onClick={() => {
+          setValue("");
+          setOpen(false);
+        }}
+        className="shrink-0 underline"
+      >
+        지우기
+      </button>
     </label>
   );
 }
 
 function DayTime({ day, time, setDay, setTime }: { day: Weekday; time: string; setDay: (d: Weekday) => void; setTime: (t: string) => void }) {
   return (
-    <div className="flex gap-2">
+    <div className="space-y-2">
       <div className="flex rounded-lg bg-bg-soft p-0.5">
         {DAYS.map((d) => (
           <button
             key={d}
             type="button"
             onClick={() => setDay(d)}
-            className={`rounded-md px-2.5 py-1.5 text-sm font-bold ${day === d ? "bg-hb-navy text-white" : "text-ink-soft"}`}
+            className={`flex-1 rounded-md py-1.5 text-sm font-bold ${day === d ? "bg-hb-navy text-white" : "text-ink-soft"}`}
           >
             {DAY_LABEL[d]}
           </button>
         ))}
       </div>
-      <input type="time" step={600} value={time} onChange={(e) => setTime(e.target.value)} className={`${INPUT} min-w-0 flex-1`} />
+      <label className="flex items-center gap-2 text-sm">
+        <span className="w-16 shrink-0 text-xs font-bold text-ink-soft">수업 시각</span>
+        <TimePick value={time} onChange={setTime} label="수업" />
+      </label>
     </div>
   );
+}
+
+/** 메모·수업시간만 고치기 (평소 시간표는 그대로) */
+function InfoEditor({ student, busy, save }: { student: Student; busy: boolean; save: Save }) {
+  const [note, setNote] = useState(student.note);
+  const [duration, setDuration] = useState(student.duration);
+  const dirty = note.trim() !== student.note || duration !== student.duration;
+  return (
+    <div className="space-y-2 rounded-xl bg-bg-soft p-3">
+      <NoteInput value={note} onChange={setNote} />
+      <DurationPick value={duration} onChange={setDuration} />
+      <button
+        type="button"
+        disabled={busy || !dirty}
+        onClick={() => save({ action: "saveInfo", studentId: student.id, note, duration })}
+        className="w-full rounded-full bg-white py-1.5 text-xs font-bold text-hb-navy ring-1 ring-line disabled:opacity-40"
+      >
+        메모·수업시간 저장
+      </button>
+    </div>
+  );
+}
+
+/** 출석! 누르면 알림 권한도 함께 묻는다 (처음 한 번) */
+function askNotify() {
+  try {
+    if ("Notification" in window && Notification.permission === "default") void Notification.requestPermission();
+  } catch {
+    /* 알림을 못 써도 화면 알림·소리는 됨 */
+  }
 }
 
 function EntryEditor({
@@ -432,6 +751,8 @@ function EntryEditor({
   busy,
   save,
   onStudent,
+  isToday,
+  att,
 }: {
   entry: Entry;
   toDay?: Weekday;
@@ -440,17 +761,21 @@ function EntryEditor({
   busy: boolean;
   save: Save;
   onStudent: (s: Student) => void;
+  isToday: boolean;
+  att?: Attend;
 }) {
   const [day, setDay] = useState<Weekday>(toDay ?? entry.weekday);
   const [time, setTime] = useState(toTime ?? entry.time);
   const [arrive, setArrive] = useState(toTime ? "" : (entry.arrive ?? ""));
   const sid = entry.student.id;
+  const dur = entry.student.duration;
   const here = { studentId: sid, weekday: entry.weekday };
   const moving = day !== entry.weekday;
   const dirty = moving || time !== entry.time || (arrive || null) !== entry.arrive;
   // 옮길 요일에 이 학생이 이미 오면 막는다 (덮어쓰지 않게)
   const clash = moving ? entries.find((e) => e.student.id === sid && e.weekday === day && e.status !== "off") : undefined;
   const canRestore = entry.status !== "regular" && (!!entry.regularTime || !!entry.fromWeekday);
+  const attEnd = att && dur ? toMin(att.at) + dur : null;
 
   const thisWeek = () =>
     entry.status === "off" && !moving && time === entry.regularTime && (arrive || null) === entry.arrive
@@ -467,8 +792,44 @@ function EntryEditor({
           {entry.status === "moved" && ` → 이번 주만 ${short(entry.time)}`}
           {entry.status === "extra" && (entry.fromWeekday ? ` → 이번 주만 ${DAY_LABEL[entry.fromWeekday]}요일에서 옮겨 옴` : ` → 이번 주만 추가 ${short(entry.time)}`)}
           {entry.status === "off" && " → 이번 주 쉼"}
+          {dur && ` · 수업 ${durText(dur)}`}
         </p>
       </div>
+
+      {((isToday && entry.status !== "off") || att) &&
+        (att ? (
+          <div className="flex items-center justify-between gap-2 rounded-xl bg-emerald-50 p-3 text-sm text-emerald-900 ring-1 ring-emerald-200">
+            <span>
+              ✓ <b>{short(att.at)}</b> 출석
+              {attEnd !== null ? (
+                <>
+                  {" "}
+                  · <b>{short(fromMin(attEnd))}</b> 끝 <span className="text-xs">({short(fromMin(attEnd - 10))}에 알림)</span>
+                </>
+              ) : (
+                <span className="block text-xs">수업시간을 정해 두면 끝나기 10분 전에 알려 드려요 (아래 메모·수업시간)</span>
+              )}
+            </span>
+            {isToday && (
+              <button type="button" disabled={busy} onClick={() => save({ action: "undoCheckIn", studentId: sid })} className="shrink-0 text-xs underline">
+                출석 취소
+              </button>
+            )}
+          </div>
+        ) : (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => {
+              askNotify();
+              unlockSound();
+              void save({ action: "checkIn", studentId: sid });
+            }}
+            className="w-full rounded-full bg-emerald-600 py-3 text-lg font-extrabold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50"
+          >
+            출석!
+          </button>
+        ))}
 
       <DayTime day={day} time={time} setDay={setDay} setTime={setTime} />
       <ArriveInput value={arrive} setValue={setArrive} />
@@ -479,7 +840,7 @@ function EntryEditor({
       ) : (
         dirty && (
           <p className="rounded-lg bg-sky-50 p-2 text-xs text-sky-900">
-            {DAY_LABEL[entry.weekday]} {short(entry.time)} → <b>{DAY_LABEL[day]} {time ? short(time) : "?"}</b>
+            {DAY_LABEL[entry.weekday]} {short(entry.time)} → <b>{DAY_LABEL[day]} {time ? ampm(time) : "?"}</b>
           </p>
         )
       )}
@@ -492,6 +853,8 @@ function EntryEditor({
         </button>
       </div>
       <p className="text-[11px] leading-4 text-ink-soft">이번 주만 = 다음 주엔 평소대로 돌아가요 · 매주 = 평소 시간표가 바뀌어요</p>
+
+      <InfoEditor student={entry.student} busy={busy} save={save} />
 
       <div className="flex flex-wrap gap-2 border-t border-line pt-3">
         {entry.status !== "off" && (
@@ -532,7 +895,10 @@ function AddEditor({ weekday, time: initialTime, data, entries, busy, save }: { 
   const [picked, setPicked] = useState(0);
   const sid = options.some((s) => s.id === picked) ? picked : (options[0]?.id ?? 0);
   const [name, setName] = useState("");
+  const [note, setNote] = useState("");
+  const [duration, setDuration] = useState<number | null>(null);
   const [arrive, setArrive] = useState("");
+  const when = time ? `${DAY_LABEL[day]} ${ampm(time)}` : "";
 
   return (
     <div className="space-y-3">
@@ -544,8 +910,6 @@ function AddEditor({ weekday, time: initialTime, data, entries, busy, save }: { 
           </button>
         ))}
       </div>
-      <DayTime day={day} time={time} setDay={setDay} setTime={setTime} />
-      <ArriveInput value={arrive} setValue={setArrive} />
       {mode === "old" ? (
         options.length ? (
           <select value={sid} onChange={(e) => setPicked(Number(e.target.value))} className={`${INPUT} w-full`}>
@@ -561,6 +925,14 @@ function AddEditor({ weekday, time: initialTime, data, entries, busy, save }: { 
       ) : (
         <input autoFocus value={name} onChange={(e) => setName(e.target.value)} maxLength={20} placeholder="이름" className={`${INPUT} w-full`} />
       )}
+      <DayTime day={day} time={time} setDay={setDay} setTime={setTime} />
+      <ArriveInput value={arrive} setValue={setArrive} />
+      {mode === "new" && (
+        <>
+          <DurationPick value={duration} onChange={setDuration} />
+          <NoteInput value={note} onChange={setNote} />
+        </>
+      )}
       {mode === "old" ? (
         <div className="grid grid-cols-2 gap-2">
           <button type="button" disabled={busy || !sid || !time} onClick={() => save({ action: "addVisit", studentId: sid, weekday: day, time, weekly: false, arrive: arrive || null })} className={PRIMARY}>
@@ -574,10 +946,10 @@ function AddEditor({ weekday, time: initialTime, data, entries, busy, save }: { 
         <button
           type="button"
           disabled={busy || !name.trim() || !time}
-          onClick={() => save({ action: "saveStudent", name, note: "", slots: [{ weekday: day, time, arrive: arrive || null }] })}
+          onClick={() => save({ action: "saveStudent", name, note, duration, slots: [{ weekday: day, time, arrive: arrive || null }] })}
           className={PRIMARY}
         >
-          새 학생 등록 (매주 {DAY_LABEL[day]} {time ? short(time) : ""})
+          새 학생 등록 (매주 {when})
         </button>
       )}
     </div>
@@ -587,12 +959,14 @@ function AddEditor({ weekday, time: initialTime, data, entries, busy, save }: { 
 function StudentEditor({ student, data, busy, save }: { student?: Student; data: WeekData; busy: boolean; save: Save }) {
   const [name, setName] = useState(student?.name ?? "");
   const [note, setNote] = useState(student?.note ?? "");
+  const [duration, setDuration] = useState<number | null>(student?.duration ?? null);
   const [times, setTimes] = useState<Record<number, string>>(() => {
     const t: Record<number, string> = {};
     if (student) data.regular.filter((r) => r.studentId === student.id).forEach((r) => (t[r.weekday] = r.time));
     return t;
   });
-  const [arrives, setArrives] = useState<Record<number, string>>(() => {
+  /** 실제 도착 시각 (값이 있으면 그 요일 아래에 칸이 열림, "" = 열었지만 비어 있음) */
+  const [arrives, setArrives] = useState<Record<number, string | undefined>>(() => {
     const t: Record<number, string> = {};
     if (student) data.regular.filter((r) => r.studentId === student.id && r.arrive).forEach((r) => (t[r.weekday] = r.arrive!));
     return t;
@@ -602,35 +976,45 @@ function StudentEditor({ student, data, busy, save }: { student?: Student; data:
     <div className="space-y-3">
       <p className="text-lg font-extrabold">{student ? `${student.name} · 평소 시간표` : "학생 추가"}</p>
       <input value={name} onChange={(e) => setName(e.target.value)} maxLength={20} placeholder="이름" className={`${INPUT} w-full`} />
-      <input value={note} onChange={(e) => setNote(e.target.value)} maxLength={60} placeholder="메모 (선택) 예) 초3 · 파닉스" className={`${INPUT} w-full`} />
+      <DurationPick value={duration} onChange={setDuration} />
+      <NoteInput value={note} onChange={setNote} />
       <div className="space-y-1.5">
-        <p className="text-xs font-bold text-ink-soft">매주 오는 요일만 수업 시간을 넣어 주세요 (도착이 다르면 오른쪽에)</p>
+        <p className="text-xs font-bold text-ink-soft">매주 오는 요일만 수업 시각을 골라 주세요</p>
         {DAYS.map((d) => (
-          <label key={d} className="flex items-center gap-2 text-sm">
-            <span className="w-8 font-bold">{DAY_LABEL[d]}</span>
-            <input type="time" step={600} value={times[d] ?? ""} onChange={(e) => setTimes((t) => ({ ...t, [d]: e.target.value }))} className={`${INPUT} min-w-0 flex-1 py-1.5`} />
-            {times[d] && (
-              <input
-                type="time"
-                step={300}
-                value={arrives[d] ?? ""}
-                onChange={(e) => setArrives((t) => ({ ...t, [d]: e.target.value }))}
-                title="실제 도착 (선택)"
-                aria-label={`${DAY_LABEL[d]}요일 실제 도착 (선택)`}
-                className={`${INPUT} w-28 py-1.5 text-xs`}
-              />
+          <div key={d} className="space-y-1">
+            <div className="flex items-center gap-2 text-sm">
+              <span className="w-6 font-bold">{DAY_LABEL[d]}</span>
+              <TimePick value={times[d] ?? ""} onChange={(v) => setTimes((t) => ({ ...t, [d]: v }))} optional label={`${DAY_LABEL[d]}요일 수업`} />
+              {times[d] && arrives[d] === undefined && (
+                <button type="button" onClick={() => setArrives((t) => ({ ...t, [d]: "" }))} className="shrink-0 text-[11px] text-ink-soft underline">
+                  도착 다름
+                </button>
+              )}
+            </div>
+            {times[d] && arrives[d] !== undefined && (
+              <div className="flex items-center gap-2 pl-8 text-xs text-ink-soft">
+                <span className="shrink-0">실제 도착</span>
+                <TimePick value={arrives[d] ?? ""} onChange={(v) => setArrives((t) => ({ ...t, [d]: v }))} optional small label={`${DAY_LABEL[d]}요일 실제 도착`} />
+                <button
+                  type="button"
+                  onClick={() =>
+                    setArrives((t) => {
+                      const n = { ...t };
+                      delete n[d];
+                      return n;
+                    })
+                  }
+                  className="shrink-0 underline"
+                >
+                  지우기
+                </button>
+              </div>
             )}
-            {times[d] ? (
-              <button type="button" onClick={() => setTimes((t) => ({ ...t, [d]: "" }))} className="w-12 text-xs text-ink-soft underline">
-                안 옴
-              </button>
-            ) : (
-              <span className="w-12 text-xs text-ink-soft">안 옴</span>
-            )}
-          </label>
+          </div>
         ))}
+        <p className="text-[11px] text-ink-soft">안 오는 요일은 &lsquo;—&rsquo;로 두세요</p>
       </div>
-      <button type="button" disabled={busy || !name.trim()} onClick={() => save({ action: "saveStudent", id: student?.id, name, note, slots })} className={PRIMARY}>
+      <button type="button" disabled={busy || !name.trim()} onClick={() => save({ action: "saveStudent", id: student?.id, name, note, duration, slots })} className={PRIMARY}>
         저장
       </button>
       {student && (
@@ -656,11 +1040,7 @@ function RowsEditor({ rows: initial, busy, save }: { rows: string[]; busy: boole
 
   function generate() {
     const out: string[] = [];
-    const [sh, sm] = start.split(":").map(Number);
-    const [eh, em] = end.split(":").map(Number);
-    for (let m = sh * 60 + sm; m <= eh * 60 + em && out.length < 16; m += step) {
-      out.push(`${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`);
-    }
+    for (let m = toMin(start); m <= toMin(end) && out.length < 16; m += step) out.push(fromMin(m));
     if (out.length) setRows(out);
   }
 
@@ -669,14 +1049,18 @@ function RowsEditor({ rows: initial, busy, save }: { rows: string[]; busy: boole
       <p className="text-lg font-extrabold">시간 칸 설정</p>
       <p className="text-xs text-ink-soft">시간표 왼쪽에 보일 시간이에요. 학생 시각은 같거나 바로 앞 칸에 들어가요.</p>
 
-      <div className="rounded-xl bg-bg-soft p-3">
-        <p className="mb-2 text-xs font-bold">한 번에 만들기</p>
-        <div className="flex flex-wrap items-center gap-1.5 text-sm">
-          <input type="time" step={600} value={start} onChange={(e) => setStart(e.target.value)} className={`${INPUT} py-1`} />
-          부터
-          <input type="time" step={600} value={end} onChange={(e) => setEnd(e.target.value)} className={`${INPUT} py-1`} />
-          까지
-          <select value={step} onChange={(e) => setStep(Number(e.target.value))} className={`${INPUT} py-1`}>
+      <div className="space-y-2 rounded-xl bg-bg-soft p-3">
+        <p className="text-xs font-bold">한 번에 만들기</p>
+        <div className="flex items-center gap-1.5 text-sm">
+          <TimePick value={start} onChange={(v) => v && setStart(v)} small label="시작" />
+          <span className="shrink-0 text-xs">부터</span>
+        </div>
+        <div className="flex items-center gap-1.5 text-sm">
+          <TimePick value={end} onChange={(v) => v && setEnd(v)} small label="끝" />
+          <span className="shrink-0 text-xs">까지</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <select value={step} onChange={(e) => setStep(Number(e.target.value))} className={`${INPUT} flex-1 py-1 text-xs`}>
             <option value={30}>30분 간격</option>
             <option value={60}>1시간 간격</option>
           </select>
@@ -689,15 +1073,8 @@ function RowsEditor({ rows: initial, busy, save }: { rows: string[]; busy: boole
       <div className="space-y-1.5">
         {rows.map((r, i) => (
           <div key={i} className="flex items-center gap-2">
-            <input
-              type="time"
-              step={300}
-              value={r}
-              onChange={(e) => setRows((rs) => rs.map((x, k) => (k === i ? e.target.value : x)))}
-              className={`${INPUT} flex-1 py-1.5`}
-            />
-            <span className="w-12 text-center text-xs text-ink-soft">{r ? rowLabel(r) : ""}</span>
-            <button type="button" disabled={rows.length <= 1} onClick={() => setRows((rs) => rs.filter((_, k) => k !== i))} className="text-xs text-ink-soft underline disabled:opacity-30">
+            <TimePick value={r} onChange={(v) => v && setRows((rs) => rs.map((x, k) => (k === i ? v : x)))} small label={`${i + 1}번째 칸`} />
+            <button type="button" disabled={rows.length <= 1} onClick={() => setRows((rs) => rs.filter((_, k) => k !== i))} className="shrink-0 text-xs text-ink-soft underline disabled:opacity-30">
               빼기
             </button>
           </div>
@@ -706,7 +1083,7 @@ function RowsEditor({ rows: initial, busy, save }: { rows: string[]; busy: boole
       <div className="flex gap-2">
         <button
           type="button"
-          disabled={rows.length >= 16}
+          disabled={rows.length >= 16 || rows.some((r) => r >= "22:00")}
           onClick={() => setRows((rs) => [...rs, plusHour(rs.filter(Boolean).sort().at(-1) ?? "13:00")])}
           className="flex-1 rounded-full border border-line py-1.5 text-xs font-bold disabled:opacity-40"
         >
@@ -793,7 +1170,9 @@ function StudentList({ data, onEdit, onAdd, onBulk }: { data: WeekData; onEdit: 
               <li key={s.id}>
                 <button type="button" onClick={() => onEdit(s)} className="w-full rounded-xl bg-bg-soft p-3 text-left hover:ring-1 hover:ring-hb-blue">
                   <p className="font-bold">
-                    {s.name} {s.note && <span className="text-xs font-normal text-ink-soft">· {s.note}</span>}
+                    {s.name}
+                    {s.duration && <span className="ml-1 text-xs font-normal text-ink-soft">· 수업 {durText(s.duration)}</span>}
+                    {s.note && <span className="block truncate text-xs font-normal text-ink-soft">📝 {s.note}</span>}
                   </p>
                   <p className="text-xs text-ink-soft">{reg.length ? reg.map((r) => `${DAY_LABEL[r.weekday]} ${short(r.time)}${r.arrive ? `(${short(r.arrive)})` : ""}`).join(" · ") : "평소 등원 없음"}</p>
                 </button>

@@ -5,6 +5,8 @@ import {
   TimetableError,
   addVisit,
   bulkAdd,
+  checkIn,
+  cleanDuration,
   cleanName,
   cleanNote,
   fixWeek,
@@ -17,10 +19,12 @@ import {
   removeRegularDay,
   removeStudent,
   restore,
+  saveInfo,
   saveRows,
   saveStudent,
   skipOnce,
   timetableConfigured,
+  undoCheckIn,
   type Weekday,
 } from "@/studio/timetable";
 
@@ -47,7 +51,9 @@ function slotsOf(v: unknown): Slots | null {
  * POST /api/studio/timetable — 읽기와 변경 모두 POST (출처·로그인 검사를 같은 규칙으로 하기 위해)
  * 변경은 한 요청 = 한 트랜잭션이고, 끝나면 그 주 시간표 전체를 돌려준다.
  *   getWeek { week }
- *   saveStudent { id?, name, note, slots } · removeStudent { id } · bulkAdd { students: [{ name, slots }] }
+ *   saveStudent { id?, name, note, duration, slots } · removeStudent { id } · bulkAdd { students: [{ name, slots }] }
+ *   saveInfo { studentId, note, duration }   메모·수업시간(분)만 바꾸기
+ *   checkIn / undoCheckIn { studentId }      오늘 출석! / 출석 취소
  *   moveOnce / moveWeekly { studentId, week, from, to, time }      이번 주만 / 매주 옮기기·시간 바꾸기
  *   addVisit { studentId, week, weekday, time, weekly }             빈 요일에 넣기
  *   skipOnce / restore / removeRegularDay { studentId, week, weekday }
@@ -67,7 +73,9 @@ export async function POST(req: NextRequest) {
   const validId = Number.isInteger(sid) && sid > 0;
   const needStudent = () => (validId ? null : fail(400, "INVALID_ID", "학생을 찾을 수 없습니다."));
   const arrive = b.arrive == null || b.arrive === "" ? null : isTime(b.arrive) ? b.arrive : undefined;
-  if (arrive === undefined) return fail(400, "INVALID_TIME", "도착 시간 형식이 올바르지 않습니다.");
+  if (arrive === undefined) return fail(400, "INVALID_TIME", "도착 시간이 올바르지 않습니다 (오전 8시 ~ 오후 10시).");
+  const duration = cleanDuration(b.duration);
+  if (duration === undefined) return fail(400, "INVALID_DURATION", "수업시간이 올바르지 않습니다.");
 
   try {
     switch (b.action) {
@@ -77,8 +85,21 @@ export async function POST(req: NextRequest) {
         const name = cleanName(b.name);
         if (!name) return fail(400, "NAME_REQUIRED", "학생 이름을 적어 주세요.");
         const slots = slotsOf(b.slots);
-        if (!slots) return fail(400, "INVALID_SLOT", "요일·시간 형식이 올바르지 않습니다.");
-        await saveStudent({ id: validId ? sid : undefined, name, note: cleanNote(b.note), slots });
+        if (!slots) return fail(400, "INVALID_SLOT", "요일·시간이 올바르지 않습니다 (오전 8시 ~ 오후 10시).");
+        await saveStudent({ id: validId ? sid : undefined, name, note: cleanNote(b.note), duration, slots });
+        break;
+      }
+      case "saveInfo": {
+        const bad = needStudent();
+        if (bad) return bad;
+        await saveInfo(sid, cleanNote(b.note), duration);
+        break;
+      }
+      case "checkIn":
+      case "undoCheckIn": {
+        const bad = needStudent();
+        if (bad) return bad;
+        await (b.action === "checkIn" ? checkIn : undoCheckIn)(sid);
         break;
       }
       case "removeStudent": {
@@ -105,14 +126,14 @@ export async function POST(req: NextRequest) {
       case "moveWeekly": {
         const bad = needStudent();
         if (bad) return bad;
-        if (!isWeekday(b.from) || !isWeekday(b.to) || !isTime(b.time)) return fail(400, "INVALID_SLOT", "요일·시간이 올바르지 않습니다.");
+        if (!isWeekday(b.from) || !isWeekday(b.to) || !isTime(b.time)) return fail(400, "INVALID_SLOT", "요일·시간이 올바르지 않습니다 (오전 8시 ~ 오후 10시).");
         await (b.action === "moveOnce" ? moveOnce : moveWeekly)(sid, week, b.from, b.to, b.time, arrive);
         break;
       }
       case "addVisit": {
         const bad = needStudent();
         if (bad) return bad;
-        if (!isWeekday(b.weekday) || !isTime(b.time)) return fail(400, "INVALID_SLOT", "요일·시간이 올바르지 않습니다.");
+        if (!isWeekday(b.weekday) || !isTime(b.time)) return fail(400, "INVALID_SLOT", "요일·시간이 올바르지 않습니다 (오전 8시 ~ 오후 10시).");
         await addVisit(sid, week, b.weekday, b.time, b.weekly === true, arrive);
         break;
       }

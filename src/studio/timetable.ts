@@ -13,15 +13,19 @@ export { normalizeWeek, weekStartOf };
  *     평소 등원이 있는 요일: 시각 = 시간 변경, null = 쉼 / 평소 등원이 없는 요일: 시각 = 추가 등원
  *     from_weekday: 다른 요일에서 옮겨 온 등원이면 원래 요일 (되돌리기 때 두 칸을 함께 되돌림)
  * - tt_settings: 화면 설정 (시간 칸 목록)
+ * - tt_students.duration: 학생별 수업시간(분, 없으면 null) — 출결과는 별개
+ * - tt_attend: '출석!' 기록 — 하루에 한 번, 누른 시각(한국 시간). 끝나기 10분 전 알림의 기준
  * 한 번의 변경(옮기기 등)에 필요한 쓰기는 모두 한 트랜잭션으로 저장한다 (중간에 실패해도 반쪽 저장 없음).
  * 아이들 실명이 들어가므로 비밀번호로 보호된 스튜디오에서만 쓰고, 코드·커밋에는 이름을 넣지 않는다.
  */
 
 export type Weekday = 1 | 2 | 3 | 4 | 5;
-export type Student = { id: number; name: string; note: string };
+export type Student = { id: number; name: string; note: string; duration: number | null };
 export type Slot = { studentId: number; weekday: Weekday; time: string; arrive: string | null };
 export type Override = { studentId: number; weekday: Weekday; time: string | null; arrive: string | null; fromWeekday: Weekday | null };
-export type WeekData = { week: string; students: Student[]; regular: Slot[]; overrides: Override[]; rows: string[] };
+/** 출석 기록: day = 날짜(YYYY-MM-DD), at = 누른 시각("HH:MM", 한국 시간) */
+export type Attend = { studentId: number; day: string; at: string };
+export type WeekData = { week: string; students: Student[]; regular: Slot[]; overrides: Override[]; rows: string[]; attend: Attend[] };
 
 /** 시간표 왼쪽 시간 칸 기본값: 1시~7시 */
 export const DEFAULT_ROWS = ["13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00"];
@@ -84,6 +88,13 @@ function ensureSchema() {
     await sql`ALTER TABLE tt_overrides ADD COLUMN IF NOT EXISTS arrive TEXT`;
     await sql`ALTER TABLE tt_regular ADD COLUMN IF NOT EXISTS arrive TEXT`;
     await sql`CREATE TABLE IF NOT EXISTS tt_settings (key TEXT PRIMARY KEY, value JSONB NOT NULL)`;
+    await sql`ALTER TABLE tt_students ADD COLUMN IF NOT EXISTS duration SMALLINT`;
+    await sql`CREATE TABLE IF NOT EXISTS tt_attend (
+      student_id INT NOT NULL REFERENCES tt_students(id) ON DELETE CASCADE,
+      day DATE NOT NULL,
+      at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (student_id, day)
+    )`;
   })().catch((e) => {
     ready = null; // 다음 요청에서 다시 시도
     throw e;
@@ -93,11 +104,21 @@ function ensureSchema() {
 
 /* ─────────── 입력 검사 ─────────── */
 
-const TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
+/**
+ * 학원 시각만 받는다: 오전 8시 ~ 오후 10시 59분.
+ * (오전/오후를 잘못 골라 "03:00"처럼 새벽 시각이 들어가면 화면에선 3:00으로 보이는데 엉뚱한 칸에 들어가는 문제가 있었음)
+ */
+const TIME = /^(0[89]|1\d|2[0-2]):[0-5]\d$/;
 export const isTime = (v: unknown): v is string => typeof v === "string" && TIME.test(v);
+/** 읽을 때는 형식만 본다 (예전에 저장된 칸이 범위 밖이어도 시간표 설정 전체가 기본값으로 바뀌지 않게) */
+const isClock = (v: unknown): v is string => typeof v === "string" && /^([01]\d|2[0-3]):[0-5]\d$/.test(v);
 export const isWeekday = (v: unknown): v is Weekday => Number.isInteger(v) && (v as number) >= 1 && (v as number) <= 5;
 export const cleanName = (v: unknown) => String(v ?? "").replace(/[<>]/g, "").replace(/\s+/g, " ").trim().slice(0, 20);
-export const cleanNote = (v: unknown) => String(v ?? "").replace(/[<>]/g, "").trim().slice(0, 60);
+export const MAX_NOTE = 200;
+export const cleanNote = (v: unknown) => String(v ?? "").replace(/[<>]/g, "").trim().slice(0, MAX_NOTE);
+/** 수업시간(분): 10분 단위 10분~5시간, 비우면 null. 형식이 틀리면 undefined */
+export const cleanDuration = (v: unknown): number | null | undefined =>
+  v == null || v === "" ? null : Number.isInteger(v) && (v as number) >= 10 && (v as number) <= 300 && (v as number) % 10 === 0 ? (v as number) : undefined;
 const DAY = ["", "월", "화", "수", "목", "금"];
 const short = (t: string) => `${Number(t.slice(0, 2)) > 12 ? Number(t.slice(0, 2)) - 12 : Number(t.slice(0, 2))}:${t.slice(3)}`;
 
@@ -106,17 +127,22 @@ const short = (t: string) => `${Number(t.slice(0, 2)) > 12 ? Number(t.slice(0, 2
 export async function getWeek(week: string): Promise<WeekData> {
   await ensureSchema();
   const sql = db();
-  const [students, regular, overrides, settings] = await Promise.all([
-    sql`SELECT id, name, note FROM tt_students WHERE active ORDER BY name`,
+  const [students, regular, overrides, settings, attend] = await Promise.all([
+    sql`SELECT id, name, note, duration FROM tt_students WHERE active ORDER BY name`,
     sql`SELECT r.student_id, r.weekday, r.time, r.arrive FROM tt_regular r JOIN tt_students s ON s.id = r.student_id WHERE s.active`,
     sql`SELECT o.student_id, o.weekday, o.time, o.arrive, o.from_weekday FROM tt_overrides o JOIN tt_students s ON s.id = o.student_id
         WHERE s.active AND o.week_start = ${week}`,
     sql`SELECT value FROM tt_settings WHERE key = 'rows'`,
+    // 그 주(월~금) 출석 + 오늘 출석 (다른 주를 보고 있어도 오늘 알림은 울리게)
+    sql`SELECT a.student_id, to_char(a.day, 'YYYY-MM-DD') AS day, to_char(a.at AT TIME ZONE 'Asia/Seoul', 'HH24:MI') AS at
+        FROM tt_attend a JOIN tt_students s ON s.id = a.student_id
+        WHERE s.active AND (a.day BETWEEN ${week}::date AND ${week}::date + 4 OR a.day = (now() AT TIME ZONE 'Asia/Seoul')::date)`,
   ]);
   const saved = settings[0]?.value;
   return {
     week,
-    students: students.map((r) => ({ id: r.id as number, name: r.name as string, note: r.note as string })),
+    students: students.map((r) => ({ id: r.id as number, name: r.name as string, note: r.note as string, duration: (r.duration as number | null) ?? null })),
+    attend: attend.map((r) => ({ studentId: r.student_id as number, day: r.day as string, at: r.at as string })),
     regular: regular.map((r) => ({ studentId: r.student_id as number, weekday: r.weekday as Weekday, time: r.time as string, arrive: (r.arrive as string | null) ?? null })),
     overrides: overrides.map((r) => ({
       studentId: r.student_id as number,
@@ -125,7 +151,7 @@ export async function getWeek(week: string): Promise<WeekData> {
       arrive: (r.arrive as string | null) ?? null,
       fromWeekday: (r.from_weekday as Weekday | null) ?? null,
     })),
-    rows: Array.isArray(saved) && saved.length && saved.every(isTime) ? (saved as string[]) : DEFAULT_ROWS,
+    rows: Array.isArray(saved) && saved.length && saved.every(isClock) ? (saved as string[]) : DEFAULT_ROWS,
   };
 }
 
@@ -156,7 +182,7 @@ const conflict = (d: number, time: string) =>
 /** 학생 추가·수정: 이름·메모 + 평소 등원(요일별 시각, 없으면 그 요일은 안 옴) */
 export type SlotInput = { weekday: Weekday; time: string; arrive?: string | null };
 
-export async function saveStudent(input: { id?: number; name: string; note: string; slots: SlotInput[] }) {
+export async function saveStudent(input: { id?: number; name: string; note: string; duration: number | null; slots: SlotInput[] }) {
   await ensureSchema();
   const sql = db();
   const days = input.slots.map((s) => s.weekday);
@@ -173,8 +199,8 @@ export async function saveStudent(input: { id?: number; name: string; note: stri
   const id = input.id ?? ((await sql`SELECT nextval(pg_get_serial_sequence('tt_students', 'id'))::int AS id`)[0].id as number);
   await sql.transaction([
     input.id
-      ? sql`UPDATE tt_students SET name = ${input.name}, note = ${input.note} WHERE id = ${id}`
-      : sql`INSERT INTO tt_students (id, name, note) VALUES (${id}, ${input.name}, ${input.note})`,
+      ? sql`UPDATE tt_students SET name = ${input.name}, note = ${input.note}, duration = ${input.duration} WHERE id = ${id}`
+      : sql`INSERT INTO tt_students (id, name, note, duration) VALUES (${id}, ${input.name}, ${input.note}, ${input.duration})`,
     sql`DELETE FROM tt_regular WHERE student_id = ${id}`,
     sql`INSERT INTO tt_regular (student_id, weekday, time, arrive) SELECT ${id}, d, t, a FROM unnest(${days}::smallint[], ${times}::text[], ${arrives}::text[]) AS x(d, t, a)`,
   ]);
@@ -208,6 +234,28 @@ export async function bulkAdd(items: { name: string; slots: SlotInput[] }[]) {
     sql`INSERT INTO tt_students (id, name) SELECT i, n FROM unnest(${ids}::int[], ${names}::text[]) AS x(i, n)`,
     sql`INSERT INTO tt_regular (student_id, weekday, time, arrive) SELECT s, d, t, a FROM unnest(${sIds}::int[], ${days}::smallint[], ${times}::text[], ${arrives}::text[]) AS x(s, d, t, a)`,
   ]);
+}
+
+/** 메모·수업시간만 바꾸기 (평소 시간표는 그대로) */
+export async function saveInfo(id: number, note: string, duration: number | null) {
+  await ensureSchema();
+  const r = await db()`UPDATE tt_students SET note = ${note}, duration = ${duration} WHERE id = ${id} AND active RETURNING id`;
+  if (!r.length) throw new TimetableError("NOT_FOUND", "학생을 찾을 수 없습니다.", 404);
+}
+
+/** 출석! — 오늘(한국 날짜) 처음 누른 시각을 남긴다. 이미 눌렀으면 그대로 */
+export async function checkIn(id: number) {
+  await ensureSchema();
+  const sql = db();
+  const ok = await sql`SELECT 1 FROM tt_students WHERE id = ${id} AND active`;
+  if (!ok.length) throw new TimetableError("NOT_FOUND", "학생을 찾을 수 없습니다.", 404);
+  await sql`INSERT INTO tt_attend (student_id, day) VALUES (${id}, (now() AT TIME ZONE 'Asia/Seoul')::date) ON CONFLICT DO NOTHING`;
+}
+
+/** 오늘 출석 취소 (잘못 누른 경우) */
+export async function undoCheckIn(id: number) {
+  await ensureSchema();
+  await db()`DELETE FROM tt_attend WHERE student_id = ${id} AND day = (now() AT TIME ZONE 'Asia/Seoul')::date`;
 }
 
 export async function removeStudent(id: number) {
